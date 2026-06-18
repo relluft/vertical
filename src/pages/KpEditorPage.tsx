@@ -47,6 +47,11 @@ interface KpHistoryEntry {
   source: string
 }
 
+interface DownloadToast {
+  title: string
+  fileName: string
+}
+
 const historyStorageKey = 'nuoperator-kp-history-v1'
 const settingsStorageKey = 'nuoperator-kp-settings-v1'
 const kpDemoScenarios = getKpDemoScenarios()
@@ -245,6 +250,7 @@ export function KpEditorPage() {
   const [wordProgress, setWordProgress] = useState<KpDocumentProgress | null>(null)
   const [lastSavedDoc, setLastSavedDoc] = useState<SavedKpDocument | null>(null)
   const [generationMessage, setGenerationMessage] = useState<string | null>(null)
+  const [downloadToast, setDownloadToast] = useState<DownloadToast | null>(null)
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(getInitialRequestModal)
   const [requestText, setRequestText] = useState('')
   const [attachedFileName, setAttachedFileName] = useState<string | null>(null)
@@ -438,6 +444,16 @@ export function KpEditorPage() {
   }, [settings])
 
   useEffect(() => {
+    if (!downloadToast || typeof window === 'undefined') {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => setDownloadToast(null), 5200)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [downloadToast])
+
+  useEffect(() => {
     if (typeof window === 'undefined') {
       return undefined
     }
@@ -514,11 +530,16 @@ export function KpEditorPage() {
     setIsGeneratingWord(true)
     setWordProgress({ percent: 0, message: 'Подготовка DOC-файла' })
     setGenerationMessage(null)
+    setDownloadToast(null)
 
     try {
       const result = await downloadKpDoc(makeKpDocumentPayload(), setWordProgress)
       setLastSavedDoc(result)
       addCurrentKpToHistory('DOC-файл')
+      setDownloadToast({
+        title: result.usedSavePicker ? 'DOC-файл сохранён' : 'DOC-файл скачан',
+        fileName: result.fileName,
+      })
       setGenerationMessage(
         result.usedSavePicker
           ? `DOC-файл сохранён: ${result.fileName}`
@@ -890,6 +911,19 @@ export function KpEditorPage() {
 
   const renderWork = () => (
     <>
+      {downloadToast ? (
+        <div className="download-toast" role="status" aria-live="polite">
+          <Save size={18} aria-hidden="true" />
+          <div>
+            <strong>{downloadToast.title}</strong>
+            <span>{downloadToast.fileName}</span>
+          </div>
+          <button type="button" aria-label="Закрыть уведомление" onClick={() => setDownloadToast(null)}>
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+
       <section className="editor-header">
         <div>
           <h1>Документ в работе: КП {exportForm.documentNumber || '1-В'}</h1>

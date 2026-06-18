@@ -616,6 +616,58 @@ img {
   font-weight: 650;
 }
 
+.download-toast {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 70;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  width: min(420px, calc(100vw - 32px));
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #86efac;
+  border-radius: 8px;
+  background: #f0fdf4;
+  box-shadow: 0 16px 38px rgba(21, 128, 61, 0.18);
+  color: #14532d;
+  padding: 12px 12px 12px 14px;
+}
+
+.download-toast strong,
+.download-toast span {
+  display: block;
+}
+
+.download-toast strong {
+  margin-bottom: 2px;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.download-toast span {
+  overflow-wrap: anywhere;
+  color: #166534;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.download-toast button {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #166534;
+  padding: 0;
+}
+
+.download-toast button:hover {
+  background: #dcfce7;
+}
+
 .word-download-progress {
   display: grid;
   gap: 8px;
