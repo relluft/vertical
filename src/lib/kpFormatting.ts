@@ -77,6 +77,6 @@ export function makeKpFileName(recipientName: string, dateIso: string, documentN
     .slice(0, 70)
 
   return recipientPart
-    ? `КП_${numberPart || 'без_номера'}_${recipientPart}_${dateIso || 'без_даты'}.doc`
-    : `КП_${numberPart || 'без_номера'}_${dateIso || 'без_даты'}.doc`
+    ? `КП_${numberPart || 'без_номера'}_${recipientPart}_${dateIso || 'без_даты'}.docx`
+    : `КП_${numberPart || 'без_номера'}_${dateIso || 'без_даты'}.docx`
 }

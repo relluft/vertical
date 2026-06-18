@@ -528,31 +528,31 @@ export function KpEditorPage() {
 
   const handleDownload = async () => {
     setIsGeneratingWord(true)
-    setWordProgress({ percent: 0, message: 'Подготовка DOC-файла' })
+    setWordProgress({ percent: 0, message: 'Подготовка Word-файла' })
     setGenerationMessage(null)
     setDownloadToast(null)
 
     try {
       const result = await downloadKpDoc(makeKpDocumentPayload(), setWordProgress)
       setLastSavedDoc(result)
-      addCurrentKpToHistory('DOC-файл')
+      addCurrentKpToHistory('Word-файл')
       setDownloadToast({
-        title: result.usedSavePicker ? 'DOC-файл сохранён' : 'DOC-файл скачан',
+        title: result.usedSavePicker ? 'Word-файл сохранён' : 'Word-файл скачан',
         fileName: result.fileName,
       })
       setGenerationMessage(
         result.usedSavePicker
-          ? `DOC-файл сохранён: ${result.fileName}`
-          : `DOC-файл сформирован: ${result.fileName}. Если браузер не спросил папку, файл ушёл в загрузки.`,
+          ? `Word-файл сохранён: ${result.fileName}`
+          : `Word-файл сформирован: ${result.fileName}. Если браузер не спросил папку, файл ушёл в загрузки.`,
       )
     } catch (error) {
       const isCancel = error instanceof DOMException && error.name === 'AbortError'
       const message =
         isCancel
-          ? 'Сохранение DOC-файла отменено.'
+          ? 'Сохранение Word-файла отменено.'
           : error instanceof Error
             ? error.message
-            : 'Не удалось сформировать DOC-файл.'
+            : 'Не удалось сформировать Word-файл.'
       setGenerationMessage(message)
     } finally {
       setIsGeneratingWord(false)
@@ -562,22 +562,22 @@ export function KpEditorPage() {
 
   const handleOpenDocument = async () => {
     if (!lastSavedDoc) {
-      setGenerationMessage('Сначала сохраните DOC-файл, потом его можно открыть этой кнопкой.')
+      setGenerationMessage('Сначала сохраните Word-файл, потом его можно открыть этой кнопкой.')
       return
     }
 
     setIsOpeningWord(true)
-    setWordProgress({ percent: 0, message: 'Открываем сохранённый DOC-файл' })
+    setWordProgress({ percent: 0, message: 'Открываем сохранённый Word-файл' })
     setGenerationMessage(null)
 
     try {
       const result = await openSavedKpDoc(lastSavedDoc, setWordProgress)
-      addCurrentKpToHistory('DOC-файл открыт')
+      addCurrentKpToHistory('Word-файл открыт')
       setGenerationMessage(
-        `Открываем уже сохранённый DOC-файл: ${result.fileName}. Если Word не открылся автоматически, откройте файл через Word.`,
+        `Открываем уже сохранённый Word-файл: ${result.fileName}. Если Word не открылся автоматически, откройте файл через Word.`,
       )
     } catch (error) {
-      setGenerationMessage(error instanceof Error ? error.message : 'Не удалось открыть DOC-файл.')
+      setGenerationMessage(error instanceof Error ? error.message : 'Не удалось открыть Word-файл.')
     } finally {
       setIsOpeningWord(false)
       window.setTimeout(() => setWordProgress(null), 900)
@@ -981,16 +981,16 @@ export function KpEditorPage() {
             className="icon-button primary"
             onClick={handleDownload}
             disabled={isGeneratingWord || isOpeningWord}
-            title="Сохранить DOC"
+            title="Сохранить Word-файл"
           >
-            <span>{isGeneratingWord ? 'Генерация...' : 'Сохранить DOC'}</span>
+            <span>{isGeneratingWord ? 'Генерация...' : 'Сохранить Word'}</span>
           </button>
           <button
             type="button"
             className="icon-button secondary"
             onClick={handleOpenDocument}
             disabled={isGeneratingWord || isOpeningWord}
-            title={lastSavedDoc ? 'Открыть сохранённый DOC' : 'Сначала сохраните DOC'}
+            title={lastSavedDoc ? 'Открыть сохранённый Word-файл' : 'Сначала сохраните Word-файл'}
           >
             <span>{isOpeningWord ? 'Открытие...' : 'Открыть'}</span>
           </button>
