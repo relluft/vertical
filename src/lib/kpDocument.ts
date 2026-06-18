@@ -60,22 +60,51 @@ export interface SavedKpDocument {
 
 const wordMimeType = 'application/msword;charset=utf-8'
 const kpTemplateAssets = {
-  header: '/templates/kp-header.png',
-  signature: '/templates/kp-signature.png',
-  stamp: '/templates/kp-stamp.png',
+  header: {
+    path: '/templates/kp-header.png',
+    location: 'kp-header.png',
+  },
+  signature: {
+    path: '/templates/kp-signature.png',
+    location: 'kp-signature.png',
+  },
+  stamp: {
+    path: '/templates/kp-stamp.png',
+    location: 'kp-stamp.png',
+  },
 } as const
 
 type KpTemplateAssetName = keyof typeof kpTemplateAssets
 
-const templateAssetCache = new Map<KpTemplateAssetName, Promise<string>>()
+interface KpTemplateAsset {
+  location: string
+  contentType: string
+  base64: string
+}
 
-function blobToDataUrl(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(reader.error ?? new Error('Не удалось прочитать изображение шаблона.'))
-    reader.readAsDataURL(blob)
-  })
+const templateAssetCache = new Map<KpTemplateAssetName, Promise<KpTemplateAsset>>()
+
+function bytesToBase64(bytes: Uint8Array) {
+  const chunkSize = 0x8000
+  let binary = ''
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
+  }
+
+  return btoa(binary)
+}
+
+function stringToBase64(value: string) {
+  return bytesToBase64(new TextEncoder().encode(value))
+}
+
+async function blobToBase64(blob: Blob) {
+  return bytesToBase64(new Uint8Array(await blob.arrayBuffer()))
+}
+
+function wrapBase64(value: string) {
+  return value.match(/.{1,76}/g)?.join('\r\n') ?? ''
 }
 
 function getAssetUrl(path: string) {
@@ -88,20 +117,26 @@ function getAssetUrl(path: string) {
 
 function loadTemplateAsset(name: KpTemplateAssetName) {
   const cached = templateAssetCache.get(name)
+  const asset = kpTemplateAssets[name]
 
   if (cached) {
     return cached
   }
 
-  const promise = fetch(getAssetUrl(kpTemplateAssets[name]))
-    .then((response) => {
+  const promise = fetch(getAssetUrl(asset.path))
+    .then(async (response) => {
       if (!response.ok) {
-        throw new Error(`Не удалось загрузить изображение шаблона: ${kpTemplateAssets[name]}`)
+        throw new Error(`Не удалось загрузить изображение шаблона: ${asset.path}`)
       }
 
-      return response.blob()
+      const blob = await response.blob()
+
+      return {
+        location: asset.location,
+        contentType: blob.type || 'image/png',
+        base64: await blobToBase64(blob),
+      }
     })
-    .then(blobToDataUrl)
 
   templateAssetCache.set(name, promise)
 
@@ -122,6 +157,38 @@ async function loadKpTemplateAssets(onProgress?: ProgressCallback) {
     signature,
     stamp,
   }
+}
+
+function renderMhtmlDocument(html: string, assets: Record<KpTemplateAssetName, KpTemplateAsset>) {
+  const boundary = `----=_NuOperatorKp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  const htmlPart = [
+    `--${boundary}`,
+    'Content-Type: text/html; charset="utf-8"',
+    'Content-Transfer-Encoding: base64',
+    'Content-Location: kp-document.html',
+    '',
+    wrapBase64(stringToBase64(html)),
+  ].join('\r\n')
+  const assetParts = Object.values(assets).map((asset) =>
+    [
+      `--${boundary}`,
+      `Content-Type: ${asset.contentType}`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Location: ${asset.location}`,
+      '',
+      wrapBase64(asset.base64),
+    ].join('\r\n'),
+  )
+
+  return [
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/related; boundary="${boundary}"; type="text/html"`,
+    '',
+    htmlPart,
+    ...assetParts,
+    `--${boundary}--`,
+    '',
+  ].join('\r\n')
 }
 
 function waitForUi() {
@@ -363,7 +430,7 @@ async function generateKpDocBlob(payload: KpDocumentPayload, onProgress?: Progre
 </head>
 <body>
   <div class="section">
-    <img class="brand-header" src="${templateAssets.header}" alt="">
+    <img class="brand-header" src="${templateAssets.header.location}" alt="">
 
     <div class="top-meta">
       <div>Контактная информация:</div>
@@ -415,8 +482,8 @@ async function generateKpDocBlob(payload: KpDocumentPayload, onProgress?: Progre
     <div class="signature">
       <p>С уважением,</p>
       <div class="signature-stack">
-        <img class="signature-stack-signature" src="${templateAssets.signature}" alt="">
-        <img class="signature-stack-stamp" src="${templateAssets.stamp}" alt="">
+        <img class="signature-stack-signature" src="${templateAssets.signature.location}" alt="">
+        <img class="signature-stack-stamp" src="${templateAssets.stamp.location}" alt="">
         <span class="signature-stack-role">Индивидуальный предприниматель</span>
         <span class="signature-stack-line"></span>
         <span class="signature-stack-name">/О.В. Беляков/</span>
@@ -428,7 +495,7 @@ async function generateKpDocBlob(payload: KpDocumentPayload, onProgress?: Progre
 
   await reportProgress(onProgress, 82, 'Готовим файл DOC')
 
-  return new Blob(['\ufeff', html], { type: wordMimeType })
+  return new Blob([renderMhtmlDocument(html, templateAssets)], { type: wordMimeType })
 }
 
 async function chooseSaveFileHandle(fileName: string) {
