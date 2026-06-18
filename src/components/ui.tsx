@@ -1,16 +1,17 @@
 /* eslint-disable react-refresh/only-export-components */
+import { motion } from 'framer-motion'
 import type { ButtonHTMLAttributes, HTMLAttributes, PropsWithChildren } from 'react'
 import { cn } from '../lib/utils'
 
 export function buttonStyles(variant: 'primary' | 'secondary' | 'ghost' = 'primary') {
   return cn(
-    'relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-full px-4 py-2.5 text-sm font-semibold tracking-[-0.01em] transition-all duration-300 ease-[var(--ease-premium)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(199,155,88,0.24)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--page-bg)]',
+    'relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-full px-4 py-2.5 text-sm font-medium tracking-[-0.01em] transition-all duration-300 ease-[var(--ease-premium)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(214,194,162,0.18)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--page-bg)]',
     variant === 'primary' &&
-      'border border-[rgba(216,175,110,0.3)] bg-[linear-gradient(180deg,rgba(255,238,205,0.95),rgba(215,176,111,0.84)_26%,rgba(124,86,41,0.98)_100%)] text-[#171009] shadow-[0_22px_54px_rgba(130,91,44,0.28)] hover:-translate-y-0.5 hover:border-[rgba(231,192,126,0.36)] hover:shadow-[0_28px_66px_rgba(130,91,44,0.34)] active:translate-y-0',
+      'border border-[var(--border-strong)] bg-transparent text-[var(--ink-950)] shadow-none hover:border-[var(--ink-950)] hover:bg-[rgba(41,41,41,0.04)]',
     variant === 'secondary' &&
-      'border border-[rgba(201,166,112,0.22)] bg-[linear-gradient(180deg,rgba(255,248,234,0.05),transparent_20%),rgba(18,15,12,0.96)] text-[var(--ink-950)] shadow-[0_16px_40px_rgba(199,155,88,0.08)] hover:-translate-y-0.5 hover:border-[rgba(214,173,107,0.32)] hover:bg-[linear-gradient(180deg,rgba(255,248,234,0.06),transparent_18%),rgba(20,17,14,0.98)] active:translate-y-0',
+      'border border-[rgba(232,221,204,0.1)] bg-[rgba(255,248,234,0.03)] text-[var(--ink-950)] shadow-[inset_0_1px_0_rgba(255,248,234,0.02)] hover:-translate-y-0.5 hover:border-[rgba(232,221,204,0.16)] hover:bg-[rgba(255,248,234,0.05)]',
     variant === 'ghost' &&
-      'border border-[var(--border-soft)] bg-[rgba(255,248,234,0.015)] text-[var(--ink-800)] hover:-translate-y-0.5 hover:border-[var(--border-strong)] hover:bg-[rgba(18,15,12,0.9)] hover:text-[var(--ink-950)] active:translate-y-0',
+      'border border-transparent bg-transparent text-[var(--ink-700)] hover:-translate-y-0.5 hover:border-[rgba(232,221,204,0.1)] hover:bg-[rgba(255,248,234,0.03)] hover:text-[var(--ink-950)]',
   )
 }
 
@@ -45,7 +46,7 @@ export function Panel({
   return (
     <div
       className={cn(
-        'frosted panel-outline rounded-[30px] p-5 text-[var(--ink-800)]',
+        'frosted panel-outline rounded-[32px] p-5 text-[var(--ink-800)]',
         toneClasses,
         className,
       )}
@@ -56,7 +57,7 @@ export function Panel({
 
 export function Eyebrow({ children }: PropsWithChildren) {
   return (
-    <span className="metal-pill inline-flex items-center rounded-full px-3.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--brand-700)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]">
+    <span className="metal-pill inline-flex items-center rounded-full px-3.5 py-1.5 text-[10px] font-medium uppercase tracking-[0.28em] text-[var(--ink-700)]">
       {children}
     </span>
   )
@@ -68,22 +69,22 @@ export function StatusPill({
 }: PropsWithChildren<{ tone: 'ready' | 'progress' | 'attention' | 'high' | 'medium' | 'low' }>) {
   const toneClasses = {
     ready:
-      'border-emerald-500/22 bg-[linear-gradient(180deg,rgba(44,107,84,0.28),rgba(22,50,40,0.18))] text-emerald-100',
+      'border-[var(--border-strong)] bg-white text-[var(--ink-950)]',
     progress:
-      'border-[rgba(214,173,107,0.24)] bg-[linear-gradient(180deg,rgba(214,173,107,0.12),rgba(214,173,107,0.04))] text-[var(--brand-700)]',
+      'border-[var(--border-strong)] bg-white text-[var(--ink-950)]',
     attention:
-      'border-[rgba(214,173,107,0.28)] bg-[linear-gradient(180deg,rgba(214,173,107,0.16),rgba(214,173,107,0.05))] text-[var(--brand-700)]',
+      'border-[rgba(186,142,88,0.2)] bg-[rgba(186,142,88,0.09)] text-[var(--brand-700)]',
     high:
-      'border-rose-500/24 bg-[linear-gradient(180deg,rgba(122,40,49,0.28),rgba(82,22,31,0.18))] text-rose-100',
+      'border-rose-500/18 bg-[rgba(88,36,42,0.22)] text-rose-100',
     medium:
-      'border-[rgba(196,145,73,0.26)] bg-[linear-gradient(180deg,rgba(138,87,32,0.26),rgba(99,61,21,0.18))] text-amber-100',
-    low: 'border-[var(--border-soft)] bg-[rgba(255,248,234,0.025)] text-[var(--ink-800)]',
+      'border-[rgba(170,124,72,0.18)] bg-[rgba(170,124,72,0.1)] text-[var(--brand-700)]',
+    low: 'border-[var(--border-soft)] bg-white text-[var(--ink-700)]',
   }[tone]
 
   return (
     <span
       className={cn(
-        'inline-flex rounded-full border px-3 py-1.5 text-[11px] font-semibold tracking-[0.02em] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]',
+        'inline-flex items-center justify-center text-center rounded-full border px-3 py-1.5 text-[11px] font-medium tracking-[0.01em]',
         toneClasses,
       )}
     >
@@ -104,7 +105,7 @@ export function MetricCard({
   return (
     <Panel className={cn('rounded-[28px] px-5 py-5', className)}>
       <div className="flex min-h-[126px] flex-col justify-between gap-4">
-        <span className="text-sm text-[var(--ink-700)]">{label}</span>
+        <span className="text-[11px] uppercase tracking-[0.24em] text-[var(--ink-600)]">{label}</span>
         <div className="text-xl font-semibold leading-tight text-[var(--ink-950)]">{value}</div>
       </div>
     </Panel>
@@ -113,11 +114,15 @@ export function MetricCard({
 
 export function ProgressBar({ value }: { value: number }) {
   return (
-    <div className="h-2.5 overflow-hidden rounded-full border border-[rgba(255,248,234,0.05)] bg-[rgba(255,248,234,0.05)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)]">
-      <div
-        className="progress-sheen h-full rounded-full bg-[linear-gradient(90deg,#7d562c,var(--brand-500),var(--brand-600),#f0d7ab)] transition-all duration-500 ease-[var(--ease-premium)]"
-        style={{ width: `${Math.max(0, Math.min(value, 1)) * 100}%` }}
-      />
+    <div className="h-2 overflow-hidden rounded-full border border-[rgba(255,248,234,0.04)] bg-[rgba(255,248,234,0.05)]">
+      <motion.div
+        initial={{ width: 0 }}
+        animate={{ width: `${Math.max(0, Math.min(value, 1)) * 100}%` }}
+        transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }} 
+        className="relative h-full rounded-full bg-[var(--ink-950)]"
+      >
+        <div className="absolute inset-0 bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.1),transparent)] animate-[shimmer_2s_infinite]" />
+      </motion.div>
     </div>
   )
 }

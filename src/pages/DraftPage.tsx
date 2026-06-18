@@ -1,7 +1,8 @@
 import { AlertCircle, ArrowRight, Link2, PencilLine, Sparkles } from 'lucide-react'
 import { Link, Navigate, useParams } from 'react-router-dom'
 import { DocumentPreview } from '../components/DocumentPreview'
-import { Button, Eyebrow, Panel, StatusPill, buttonStyles, fieldStyles } from '../components/ui'
+import { PageTransition } from '../components/PageTransition'
+import { Button, Eyebrow, Panel, StatusPill, buttonStyles } from '../components/ui'
 import { useDemo } from '../context/DemoContext'
 import { exportPath } from '../lib/routes'
 import { getBranchLabel } from '../lib/workflow'
@@ -29,6 +30,9 @@ export function DraftPage() {
     applyDemoVariant,
     updateField,
     updateOfferItem,
+    addOfferItem,
+    deleteOfferItem,
+    updateSectionStat,
     selectSection,
     focusIssue,
     openSectionFromSource,
@@ -53,16 +57,16 @@ export function DraftPage() {
 
   if (activeBranch === 'kp') {
     return (
-      <div className="space-y-5">
+      <PageTransition className="space-y-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <Eyebrow>{getBranchLabel(activeBranch)} / Редактор</Eyebrow>
+          <Eyebrow>{getBranchLabel(activeBranch)} / Рабочая таблица</Eyebrow>
 
           <div className="flex flex-wrap items-center justify-end gap-3">
             <Link
               to={exportPath(activeBranch, demoCase.exportId)}
               className={`${buttonStyles('primary')} px-4 py-2.5 text-sm`}
             >
-              Перейти к экспорту
+              Перейти к финальному КП
               <ArrowRight size={16} />
             </Link>
           </div>
@@ -77,32 +81,35 @@ export function DraftPage() {
           pipelineName={pipelineName}
           selectedSectionId={selectedSectionId}
           onUpdateOfferItem={updateOfferItem}
+          onAddOfferItem={addOfferItem}
+          onDeleteOfferItem={deleteOfferItem}
           onUpdateField={updateField}
+          onUpdateSectionStat={updateSectionStat}
         />
-      </div>
+      </PageTransition>
     )
   }
 
   return (
-    <div className="space-y-6">
+    <PageTransition className="space-y-6">
       <Panel tone="highlight" className="rounded-[34px] p-6 md:p-8">
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr),320px]">
           <div>
-            <Eyebrow>{getBranchLabel(activeBranch)} / Редактор</Eyebrow>
+            <Eyebrow>{getBranchLabel(activeBranch)} / Рабочее пространство</Eyebrow>
             <h1 className="display-title mt-5 text-5xl text-[var(--ink-950)] md:text-6xl">
-              Рабочий черновик
+              Рабочее пространство
             </h1>
             <p className="mt-4 max-w-3xl text-sm leading-8 text-[var(--ink-800)] md:text-base">
-              Пространство для просмотра структуры, замечаний проверки качества и валидации по
-              источникам.
+              Здесь можно просматривать структуру документа, переключаться по разделам и править
+              ключевые значения прямо в содержимом.
             </p>
           </div>
 
           <div className="executive-card executive-highlight rounded-[30px] p-5">
             <div className="relative">
-              <div className="text-sm text-[var(--ink-700)]">Состояние редактора</div>
+              <div className="text-sm text-[var(--ink-700)]">Состояние пространства</div>
               <div className="mt-2 text-2xl font-semibold text-[var(--ink-950)]">
-                {hasDemoVariant ? 'Демонстрационный черновик' : 'Пустая рабочая оболочка'}
+                {hasDemoVariant ? 'Черновик готов' : 'Рабочая область пуста'}
               </div>
               <Button
                 className="mt-5 w-full justify-center"
@@ -110,14 +117,14 @@ export function DraftPage() {
                 onClick={() => applyDemoVariant(pageKey)}
               >
                 <Sparkles size={16} />
-                Применить демо-вариант
+                {hasDemoVariant ? 'Обновить пример' : 'Заполнить примером'}
               </Button>
             </div>
           </div>
         </div>
       </Panel>
 
-      <section className="grid gap-6 xl:grid-cols-[240px,minmax(0,1fr),340px]">
+      <section className="grid gap-6 xl:grid-cols-[240px,minmax(0,1fr),320px]">
         <Panel className="rounded-[32px] p-4">
           <div className="flex items-center gap-2">
             <PencilLine size={17} className="text-[var(--brand-700)]" />
@@ -159,35 +166,10 @@ export function DraftPage() {
           pipelineName={pipelineName}
           selectedSectionId={selectedSectionId}
           onSelectSection={visibleSections.length ? selectSection : undefined}
+          onUpdateSectionStat={updateSectionStat}
         />
 
         <div className="space-y-6">
-          <Panel className="rounded-[32px] p-5">
-            <div className="font-semibold text-[var(--ink-950)]">Редактируемые поля</div>
-            <div className="mt-4 space-y-4">
-              {draft.fields.map((field) => (
-                <label key={field.id} className="block">
-                  <div className="text-sm font-semibold text-[var(--ink-950)]">{field.label}</div>
-                  <div className="mt-1 text-xs text-[var(--ink-500)]">{field.hint}</div>
-                  {field.id === 'specialTerms' ? (
-                    <textarea
-                      value={field.value}
-                      onChange={(event) => updateField(field.id, event.target.value)}
-                      rows={3}
-                      className={`mt-3 w-full rounded-2xl ${fieldStyles}`}
-                    />
-                  ) : (
-                    <input
-                      value={field.value}
-                      onChange={(event) => updateField(field.id, event.target.value)}
-                      className={`mt-3 w-full rounded-2xl ${fieldStyles}`}
-                    />
-                  )}
-                </label>
-              ))}
-            </div>
-          </Panel>
-
           <Panel className="rounded-[32px] p-5">
             <div className="flex items-center gap-2">
               <AlertCircle size={17} className="text-[var(--brand-700)]" />
@@ -273,6 +255,6 @@ export function DraftPage() {
           </Link>
         </div>
       </section>
-    </div>
+    </PageTransition>
   )
 }

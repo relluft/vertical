@@ -30,8 +30,10 @@ import {
   getRunStageBlueprints,
   recalculateOfferTable,
 } from '../data/demoData'
+import { attachVerticalProductData } from '../lib/verticalProducts'
 import type {
   DemoDocumentType,
+  DemoOfferTable,
   DemoPageKey,
   DemoState,
   DemoWorkflowStageId,
@@ -41,17 +43,24 @@ import type {
   RecentOperation,
 } from '../types/demo'
 
-const storageKey = 'nuoperator-demo-state-v4'
+const storageKey = 'nuoperator-kp-editor-state-v2'
+const removedFastenersPattern =
+  /^.*(?:Креп[её]ж и доборные элементы для монтажа|состав уточнить|состав не указан).*$/gim
+const removedFastenersId = 'offer-missing-fasteners'
 
 interface DemoContextValue {
   state: DemoState
   startPipeline: (branch: DemoDocumentType, pipelineName: string) => void
   applyDemoVariant: (pageKey: DemoPageKey) => void
+  applyKpOfferTable: (offerTable: DemoOfferTable) => void
   startRun: (runId: string, branch: DemoDocumentType) => void
   abortRun: (branch: DemoDocumentType) => void
   completeRun: (branch: DemoDocumentType) => void
   updateField: (fieldId: DemoState['draft']['fields'][number]['id'], value: string) => void
   updateOfferItem: (itemId: string, field: OfferItemEditableField, value: string) => void
+  addOfferItem: () => void
+  deleteOfferItem: (itemId: string) => void
+  updateSectionStat: (sectionId: string, statIndex: number, value: string) => void
   selectDocumentType: (documentType: DemoDocumentType) => void
   selectSection: (sectionId: string) => void
   focusIssue: (issue: QAFlag) => void
@@ -77,37 +86,111 @@ function loadState() {
   const initialState = createInitialDemoState()
 
   if (typeof window === 'undefined') {
-    return initialState
+    return normalizeDemoState(initialState)
   }
 
   const cached = window.localStorage.getItem(storageKey)
   if (!cached) {
-    return initialState
+    return normalizeDemoState(initialState)
   }
 
   try {
     const parsed = JSON.parse(cached) as Partial<DemoState>
+    const parsedExportForm = (parsed.exportForm ?? {}) as Partial<DemoState['exportForm']>
+    const mergedExportForm = {
+      ...initialState.exportForm,
+      ...parsedExportForm,
+    }
+    const hasStoredDocumentTitle = Object.prototype.hasOwnProperty.call(parsedExportForm, 'documentTitle')
 
-    return {
+    return normalizeDemoState({
       ...initialState,
       ...parsed,
       draft: {
         ...initialState.draft,
         ...parsed.draft,
-        cellAnnotations: parsed.draft?.cellAnnotations ?? initialState.draft.cellAnnotations,
+        cellAnnotations: {
+          ...(parsed.draft?.cellAnnotations ?? initialState.draft.cellAnnotations),
+          ...getDemoDraftCellAnnotations(parsed.draft?.documentType ?? initialState.draft.documentType),
+        },
       },
       exportForm: {
-        ...initialState.exportForm,
-        ...parsed.exportForm,
+        ...mergedExportForm,
+        documentTitle:
+          hasStoredDocumentTitle && typeof parsedExportForm.documentTitle === 'string'
+            ? parsedExportForm.documentTitle || mergedExportForm.documentNumber
+            : mergedExportForm.documentNumber,
       },
       exportGeneration: {
         ...initialState.exportGeneration,
         ...parsed.exportGeneration,
       },
-    }
+    })
   } catch {
-    return initialState
+    return normalizeDemoState(initialState)
   }
+}
+
+function removeFastenersLine(value: string) {
+  return value
+    .replace(removedFastenersPattern, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function sanitizeDemoState(state: DemoState): DemoState {
+  const offerTable = state.draft.offerTable
+
+  return {
+    ...state,
+    cases: state.cases.map((demoCase) => ({
+      ...demoCase,
+      kpRequestSummary: removeFastenersLine(demoCase.kpRequestSummary),
+      kpContextNotes: removeFastenersLine(demoCase.kpContextNotes),
+    })),
+    draft: {
+      ...state.draft,
+      offerTable: offerTable
+        ? recalculateOfferTable({
+            ...offerTable,
+            items: offerTable.items
+              .filter((item) => item.id !== removedFastenersId)
+              .map((item) => attachVerticalProductData(item)),
+          })
+        : null,
+      cellAnnotations: Object.fromEntries(
+        Object.entries(state.draft.cellAnnotations).filter(
+          ([cellId]) => !cellId.startsWith(`kp-item:${removedFastenersId}:`),
+        ),
+      ),
+      issues: state.draft.issues.filter((issue) => !issue.id.includes(removedFastenersId)),
+    },
+  }
+}
+
+function addLatestCellAnnotations(state: DemoState): DemoState {
+  const latestCellAnnotations = getDemoDraftCellAnnotations(state.draft.documentType)
+
+  if (!Object.keys(latestCellAnnotations).length) {
+    return state
+  }
+
+  const nextCellAnnotations = {
+    ...state.draft.cellAnnotations,
+    ...latestCellAnnotations,
+  }
+
+  return {
+    ...state,
+    draft: {
+      ...state.draft,
+      cellAnnotations: nextCellAnnotations,
+    },
+  }
+}
+
+function normalizeDemoState(state: DemoState): DemoState {
+  return addLatestCellAnnotations(sanitizeDemoState(state))
 }
 
 function createOperation(branch: DemoDocumentType, title: string, description: string): RecentOperation {
@@ -170,7 +253,7 @@ export function DemoProvider({ children }: PropsWithChildren) {
 
       const trimmedName = pipelineName.trim()
       const nextPipelineNumber = current.nextPipelineNumber ?? 1
-      const resolvedPipelineName = trimmedName || `Новый пайплайн ${nextPipelineNumber}`
+      const resolvedPipelineName = trimmedName || `Новое КП ${nextPipelineNumber}`
 
       const clearedDemoFlags = stripBranchDemoFlags(current, branch)
       const resetCase =
@@ -238,8 +321,8 @@ export function DemoProvider({ children }: PropsWithChildren) {
           current,
           createOperation(
             branch,
-            'Пайплайн запущен',
-            `Создан новый сценарий работы с названием «${resolvedPipelineName}».`,
+            'КП создано',
+            `Создан новый кейс товарного КП: «${resolvedPipelineName}».`,
           ),
         ),
       }
@@ -256,7 +339,7 @@ export function DemoProvider({ children }: PropsWithChildren) {
       }
 
       const pipelineName =
-        current.branchLaunch[branch].pipelineName || (branch === 'kp' ? 'Коммерческий пайплайн' : 'Технический пайплайн')
+        current.branchLaunch[branch].pipelineName || (branch === 'kp' ? 'Товарное КП' : 'Технический пайплайн')
 
       let nextCase = demoCase
       let nextDraft = current.draft
@@ -264,8 +347,8 @@ export function DemoProvider({ children }: PropsWithChildren) {
       let nextSelectedSourceKpId = current.selectedSourceKpId
       let nextExportForm = current.exportForm
       let nextExportGeneration = current.exportGeneration
-      let title = 'Подключён демонстрационный вариант'
-      let description = 'Для текущего шага применены демонстрационные данные.'
+      let title = 'Подключён рабочий пример'
+      let description = 'Для текущего шага применены подготовленные данные.'
 
       switch (pageKey) {
         case 'kp-need':
@@ -273,36 +356,36 @@ export function DemoProvider({ children }: PropsWithChildren) {
             ...demoCase,
             kpRequestSummary: getDemoNeedText('kp', pipelineName),
           }
-          title = 'Демо для этапа потребности'
-          description = 'Заполнен пример текста для базовой потребности заказчика.'
+          title = 'Добавлена потребность'
+          description = 'Заполнен пример потребности для товарного КП.'
           break
         case 'kp-materials':
           nextCase = {
             ...demoCase,
             kpMaterials: getDemoMaterials(),
           }
-          title = 'Демо для материалов'
-          description = 'Добавлен обезличенный набор материалов для демонстрации.'
+          title = 'Добавлены материалы'
+          description = 'Добавлен обезличенный набор материалов для рабочего примера.'
           break
         case 'kp-comments':
           nextCase = {
             ...demoCase,
             kpContextNotes: getDemoNotes('kp'),
           }
-          title = 'Демо для вводных'
+          title = 'Заполнены вводные'
           description = 'Заполнен пример свободных вводных для генерации КП.'
           break
         case 'tz-source':
           nextSelectedSourceKpId = getDemoSourceOptions()[0]?.id ?? null
-          title = 'Демо для основы ТЗ'
-          description = 'Открыты обезличенные варианты базового КП для демонстрации.'
+          title = 'Выбрана основа ТЗ'
+          description = 'Открыты обезличенные варианты базового КП для дальнейшей работы.'
           break
         case 'tz-need':
           nextCase = {
             ...demoCase,
             tzRequestSummary: getDemoNeedText('tz', pipelineName),
           }
-          title = 'Демо для технической цели'
+          title = 'Заполнена техническая цель'
           description = 'Заполнен пример текста для адаптации задачи под ТЗ.'
           break
         case 'tz-comments':
@@ -311,7 +394,7 @@ export function DemoProvider({ children }: PropsWithChildren) {
             tzTechnicalNotes: getDemoNotes('tz'),
             tzMeasurements: getDemoMeasurements(),
           }
-          title = 'Демо для технических вводных'
+          title = 'Заполнены технические вводные'
           description = 'Добавлены контрольные параметры и свободные технические вводные.'
           break
         case 'kp-draft':
@@ -320,8 +403,10 @@ export function DemoProvider({ children }: PropsWithChildren) {
             ...nextDraft,
             ...buildDraftDemo(branch, pipelineName),
           }
-          title = branch === 'kp' ? 'Демо для редактора КП' : 'Демо для редактора ТЗ'
-          description = 'Подготовлен обезличенный черновик для показа в редакторе.'
+          title = branch === 'kp' ? 'Подготовлена рабочая таблица КП' : 'Подготовлен черновик ТЗ'
+          description = branch === 'kp'
+            ? 'Сформирована таблица с товарами Вертикаль, ценами и статусами проверки.'
+            : 'Подготовлен обезличенный черновик для просмотра и правок.'
           break
         case 'kp-export':
         case 'tz-export':
@@ -331,8 +416,10 @@ export function DemoProvider({ children }: PropsWithChildren) {
           }
           nextExportForm = createDemoExportForm()
           nextExportGeneration = createEmptyExportGeneration()
-          title = branch === 'kp' ? 'Демо для экспорта КП' : 'Демо для экспорта ТЗ'
-          description = 'Подготовлен пример финального экрана экспорта с реквизитами и выбором формата.'
+          title = branch === 'kp' ? 'Подготовлено финальное КП' : 'Подготовлен экспорт ТЗ'
+          description = branch === 'kp'
+            ? 'Подготовлен экран финального КП без внутренних статусов и рабочих комментариев.'
+            : 'Подготовлен экран экспорта с реквизитами и выбором формата.'
           break
         case 'kp-run':
         case 'tz-run':
@@ -343,12 +430,12 @@ export function DemoProvider({ children }: PropsWithChildren) {
             completedAt: null,
             stages: getRunStageBlueprints(branch),
           }
-          title = branch === 'kp' ? 'Демо для сборки КП' : 'Демо для сборки ТЗ'
-          description = 'Подготовлен демонстрационный сценарий для экрана сборки.'
+          title = branch === 'kp' ? 'Подготовлена сборка КП' : 'Подготовлена сборка ТЗ'
+          description = 'Подготовлен сценарий для экрана сборки.'
           break
       }
 
-      return {
+      return sanitizeDemoState({
         ...current,
         cases: [nextCase],
         draft: nextDraft,
@@ -363,7 +450,43 @@ export function DemoProvider({ children }: PropsWithChildren) {
           [pageKey]: true,
         },
         recentOperations: appendOperation(current, createOperation(branch, title, description)),
-      }
+      })
+    })
+  }, [])
+
+  const applyKpOfferTable = useCallback((offerTable: DemoOfferTable) => {
+    setState((current) => {
+      const nextOfferTable = recalculateOfferTable({
+        ...offerTable,
+        items: offerTable.items.map((item) => ({ ...item })),
+        totals: offerTable.totals.map((total) => ({ ...total })),
+      })
+
+      return sanitizeDemoState({
+        ...current,
+        selectedDocumentType: 'kp',
+        draft: {
+          ...current.draft,
+          documentType: 'kp',
+          offerTable: nextOfferTable,
+        },
+        currentBranchStage: {
+          ...current.currentBranchStage,
+          kp: 'editor',
+        },
+        branchProgress: {
+          ...current.branchProgress,
+          kp: {
+            ...current.branchProgress.kp,
+            currentStageId: 'editor',
+            completedStageIds: Array.from(new Set([...current.branchProgress.kp.completedStageIds, 'need', 'run'])),
+          },
+        },
+        recentOperations: appendOperation(
+          current,
+          createOperation('kp', 'Подготовлена демо-таблица КП', 'Рабочая таблица заполнена выбранным демо-набором.'),
+        ),
+      })
     })
   }, [])
 
@@ -401,10 +524,10 @@ export function DemoProvider({ children }: PropsWithChildren) {
           current,
           createOperation(
             branch,
-            branch === 'kp' ? 'Запущена сборка КП' : 'Запущена сборка ТЗ',
+            branch === 'kp' ? 'Запущено формирование таблицы КП' : 'Запущена сборка ТЗ',
             branch === 'kp'
-              ? 'Система начала демонстрационную сборку коммерческого предложения.'
-              : 'Система начала демонстрационную сборку технического задания.',
+              ? 'Система начала распознавание, подбор на Вертикаль и подтягивание цен.'
+              : 'Система начала сборку технического задания.',
           ),
         ),
       }
@@ -448,7 +571,7 @@ export function DemoProvider({ children }: PropsWithChildren) {
 
       const pipelineName =
         current.branchLaunch[branch].pipelineName ||
-        (branch === 'kp' ? 'Коммерческий пайплайн' : 'Технический пайплайн')
+        (branch === 'kp' ? 'Товарное КП' : 'Технический пайплайн')
       const draftPageKey = branch === 'kp' ? 'kp-draft' : 'tz-draft'
 
       return {
@@ -485,10 +608,10 @@ export function DemoProvider({ children }: PropsWithChildren) {
           current,
           createOperation(
             branch,
-            branch === 'kp' ? 'Черновик КП собран' : 'Черновик ТЗ собран',
+            branch === 'kp' ? 'Рабочая таблица КП готова' : 'Черновик ТЗ собран',
             branch === 'kp'
-              ? 'Демонстрационная сборка завершена, можно перейти к редактору КП.'
-              : 'Демонстрационная сборка завершена, можно перейти к редактору ТЗ.',
+              ? 'Таблица сформирована, можно проверить товары, цены и статусы.'
+              : 'Сборка завершена, можно перейти в рабочее пространство ТЗ.',
           ),
         ),
       }
@@ -526,8 +649,17 @@ export function DemoProvider({ children }: PropsWithChildren) {
         return current
       }
 
-      if (field === 'description') {
-        if (item.description === value) {
+      const textFields: OfferItemEditableField[] = [
+        'description',
+        'sourceNeed',
+        'productCode',
+        'unit',
+        'reviewStatus',
+        'managerComment',
+      ]
+
+      if (textFields.includes(field)) {
+        if (item[field] === value) {
           return current
         }
 
@@ -538,7 +670,7 @@ export function DemoProvider({ children }: PropsWithChildren) {
             offerTable: recalculateOfferTable({
               ...offerTable,
               items: offerTable.items.map((entry) =>
-                entry.id === itemId ? { ...entry, description: value } : entry,
+                entry.id === itemId ? { ...entry, [field]: value } : entry,
               ),
             }),
           },
@@ -565,6 +697,97 @@ export function DemoProvider({ children }: PropsWithChildren) {
             items: offerTable.items.map((entry) =>
               entry.id === itemId ? { ...entry, [field]: parsedValue } : entry,
             ),
+          }),
+        },
+      }
+    })
+  }, [])
+
+  const addOfferItem = useCallback(() => {
+    setState((current) => {
+      const offerTable = current.draft.offerTable
+
+      if (!offerTable) {
+        return current
+      }
+
+      const timestamp = Date.now()
+
+      return {
+        ...current,
+        draft: {
+          ...current.draft,
+          offerTable: recalculateOfferTable({
+            ...offerTable,
+            items: [
+              ...offerTable.items,
+              {
+                id: `offer-manual-${timestamp}`,
+                sourceNeed: 'Добавлено вручную',
+                description: '',
+                productCode: '',
+                unit: 'шт',
+                quantity: 1,
+                unitPrice: 0,
+                installationUnitPrice: 0,
+                minSalePrice: 0,
+                maxSalePrice: 0,
+                marketBenchmark: 0,
+                reviewStatus: 'нужно уточнить',
+                managerComment: '',
+              },
+            ],
+          }),
+        },
+      }
+    })
+  }, [])
+
+  const deleteOfferItem = useCallback((itemId: string) => {
+    setState((current) => {
+      const offerTable = current.draft.offerTable
+
+      if (!offerTable || !offerTable.items.some((entry) => entry.id === itemId)) {
+        return current
+      }
+
+      return {
+        ...current,
+        draft: {
+          ...current.draft,
+          offerTable: recalculateOfferTable({
+            ...offerTable,
+            items: offerTable.items.filter((entry) => entry.id !== itemId),
+          }),
+        },
+      }
+    })
+  }, [])
+
+  const updateSectionStat = useCallback((sectionId: string, statIndex: number, value: string) => {
+    setState((current) => {
+      const targetSection = current.draft.sections.find((section) => section.id === sectionId)
+      const currentValue = targetSection?.stats?.[statIndex]?.value
+
+      if (!targetSection?.stats || currentValue === undefined || currentValue === value) {
+        return current
+      }
+
+      return {
+        ...current,
+        draft: {
+          ...current.draft,
+          sections: current.draft.sections.map((section) => {
+            if (section.id !== sectionId || !section.stats) {
+              return section
+            }
+
+            return {
+              ...section,
+              stats: section.stats.map((stat, index) =>
+                index === statIndex ? { ...stat, value } : stat,
+              ),
+            }
           }),
         },
       }
@@ -794,8 +1017,8 @@ export function DemoProvider({ children }: PropsWithChildren) {
             branch,
             `Сформирован ${format}`,
             branch === 'kp'
-              ? `Подготовлен демонстрационный экспорт коммерческого предложения в формате ${format}.`
-              : `Подготовлен демонстрационный экспорт технического задания в формате ${format}.`,
+              ? `Подготовлено финальное коммерческое предложение в формате ${format}.`
+              : `Подготовлен экспорт технического задания в формате ${format}.`,
           ),
         ),
       }
@@ -813,7 +1036,7 @@ export function DemoProvider({ children }: PropsWithChildren) {
         ...current,
         exportGeneration: {
           ...current.exportGeneration,
-          downloadMessage: `В демо здесь начнётся скачивание ${format}.`,
+          downloadMessage: `Скачивание ${format} начнётся здесь.`,
         },
       }
     })
@@ -883,9 +1106,9 @@ export function DemoProvider({ children }: PropsWithChildren) {
         current,
         createOperation(
           'tz',
-          caseId ? 'Выбрана демонстрационная основа' : 'ТЗ собирается без основы',
+          caseId ? 'Выбрана рабочая основа' : 'ТЗ собирается без основы',
           caseId
-            ? 'Для сценария ТЗ выбрана нейтральная база из демонстрационного КП.'
+            ? 'Для сценария ТЗ выбрана нейтральная база из подготовленного КП.'
             : 'Сценарий ТЗ продолжает работу без заранее выбранной основы.',
         ),
       ),
@@ -907,14 +1130,14 @@ export function DemoProvider({ children }: PropsWithChildren) {
         return current
       }
 
-      return {
+      return sanitizeDemoState({
         ...current,
         cases: [
           branch === 'kp'
-            ? { ...demoCase, kpRequestSummary: value }
+            ? { ...demoCase, kpRequestSummary: removeFastenersLine(value) }
             : { ...demoCase, tzRequestSummary: value },
         ],
-      }
+      })
     })
   }, [])
 
@@ -933,14 +1156,14 @@ export function DemoProvider({ children }: PropsWithChildren) {
         return current
       }
 
-      return {
+      return sanitizeDemoState({
         ...current,
         cases: [
           branch === 'kp'
-            ? { ...demoCase, kpContextNotes: value }
+            ? { ...demoCase, kpContextNotes: removeFastenersLine(value) }
             : { ...demoCase, tzTechnicalNotes: value },
         ],
-      }
+      })
     })
   }, [])
 
@@ -978,11 +1201,15 @@ export function DemoProvider({ children }: PropsWithChildren) {
       state,
       startPipeline,
       applyDemoVariant,
+      applyKpOfferTable,
       startRun,
       abortRun,
       completeRun,
       updateField,
       updateOfferItem,
+      addOfferItem,
+      deleteOfferItem,
+      updateSectionStat,
       selectDocumentType,
       selectSection,
       focusIssue,
@@ -1005,11 +1232,15 @@ export function DemoProvider({ children }: PropsWithChildren) {
       state,
       startPipeline,
       applyDemoVariant,
+      applyKpOfferTable,
       startRun,
       abortRun,
       completeRun,
       updateField,
       updateOfferItem,
+      addOfferItem,
+      deleteOfferItem,
+      updateSectionStat,
       selectDocumentType,
       selectSection,
       focusIssue,

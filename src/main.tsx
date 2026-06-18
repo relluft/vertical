@@ -13,9 +13,12 @@ import '@fontsource/ibm-plex-serif/500.css'
 import '@fontsource/ibm-plex-serif/600.css'
 import './index.css'
 import App from './App'
+import { registerPwa } from './pwa'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
   </StrictMode>,
 )
+
+registerPwa()

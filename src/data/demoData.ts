@@ -19,60 +19,44 @@
   SourceLink,
   StageStatus,
 } from '../types/demo'
+import { applyKpPriceAdjustments, getEffectivePurchaseUnitPrice } from '../lib/kpPricing'
+import { attachVerticalProductData, resolveVerticalProductUrl } from '../lib/verticalProducts'
 
 const runStageBlueprints: Record<DemoDocumentType, DemoStage[]> = {
   kp: [
     {
-      id: 'materials',
-      title: 'Материалы для КП собраны',
-      summary: 'Сводим потребность, материалы и вводные в единый рабочий контур.',
-      durationLabel: '3 сек',
-      details: 'Проверяем, что все важные вводные для коммерческого предложения собраны в одном месте.',
-      durationMs: 3000,
-      status: 'pending',
-    },
-    {
-      id: 'norms',
-      title: 'Коммерческие ограничения проверены',
-      summary: 'Уточняем, что важно учесть в сроках, составе работ и порядке согласования.',
-      durationLabel: '4 сек',
-      details: 'На этом шаге подсвечиваются только те ограничения, которые влияют на итоговое КП.',
-      durationMs: 4200,
-      status: 'pending',
-    },
-    {
-      id: 'pricing',
-      title: 'Состав предложения собран',
-      summary: 'Формируем структуру КП и подготавливаем основу для редактора.',
-      durationLabel: '3 сек',
-      details: 'Система собирает нейтральный каркас предложения без персональных данных и контрагентов.',
-      durationMs: 3400,
-      status: 'pending',
-    },
-    {
-      id: 'draft',
-      title: 'Черновик КП готов',
-      summary: 'Подготавливаем рабочий документ для демонстрации и правок.',
-      durationLabel: '4 сек',
-      details: 'На выходе появляется черновик, который можно показать в редакторе и на согласовании.',
-      durationMs: 4200,
-      status: 'pending',
-    },
-    {
-      id: 'qa',
-      title: 'Точки для проверки отмечены',
-      summary: 'Подсвечиваем, что стоит подтвердить перед финальной отправкой.',
-      durationLabel: '3 сек',
-      details: 'Сюда попадают только важные уточнения по срокам, условиям и составу работ.',
-      durationMs: 3200,
-      status: 'pending',
-    },
-    {
-      id: 'ready',
-      title: 'КП готово к показу',
-      summary: 'Черновик можно открыть в редакторе или передать на согласование.',
+      id: 'parse',
+      title: 'Распознаем позиции',
+      summary: 'Разбираем потребность или введенный текст на товарные строки.',
       durationLabel: '2 сек',
-      details: 'Демонстрационная версия готова, но персональные данные по-прежнему не используются.',
+      details: 'Система выделяет товары, количества, единицы измерения и важные характеристики.',
+      durationMs: 2200,
+      status: 'pending',
+    },
+    {
+      id: 'match',
+      title: 'Ищем товары на Вертикаль',
+      summary: 'Подбираем подходящие товары и фиксируем сомнительные совпадения.',
+      durationLabel: '3 сек',
+      details: 'Подбор идет внутри обработки, без отдельного пользовательского экрана.',
+      durationMs: 2800,
+      status: 'pending',
+    },
+    {
+      id: 'prices',
+      title: 'Подтягиваем цены',
+      summary: 'Берем представительские цены через личный кабинет Вертикаль, если доступ есть.',
+      durationLabel: '3 сек',
+      details: 'Если цена недоступна, строка попадет в таблицу со статусом проверки.',
+      durationMs: 2600,
+      status: 'pending',
+    },
+    {
+      id: 'table',
+      title: 'Формируем рабочую таблицу',
+      summary: 'Создаем строки КП со статусами проверки, ценами, маржей и комментариями.',
+      durationLabel: '2 сек',
+      details: 'Следующий полноценный экран для менеджера - рабочая таблица КП.',
       durationMs: 2200,
       status: 'pending',
     },
@@ -128,7 +112,7 @@ const runStageBlueprints: Record<DemoDocumentType, DemoStage[]> = {
       title: 'ТЗ готово к показу',
       summary: 'Документ можно просмотреть, отредактировать и вывести на согласование.',
       durationLabel: '2 сек',
-      details: 'Демонстрационная версия остаётся нейтральной и безопасной для показа.',
+      details: 'Рабочая версия остаётся нейтральной и безопасной для показа.',
       durationMs: 2200,
       status: 'pending',
     },
@@ -140,7 +124,7 @@ const blankDraftFields: DraftField[] = [
     id: 'dueDate',
     label: 'Срок выполнения',
     value: '',
-    hint: 'Заполняется вручную на финальном этапе или через демонстрационный вариант.',
+    hint: 'Заполняется вручную на финальном этапе или из рабочего примера.',
   },
   {
     id: 'specialTerms',
@@ -151,35 +135,22 @@ const blankDraftFields: DraftField[] = [
 ]
 
 const demoFieldDefaults = {
-  dueDate: 'до 10 рабочих дней после подтверждения сценария',
-  specialTerms: 'работы планируются по согласованному окну без раскрытия персональных данных',
+  dueDate: 'КП действительно 5 рабочих дней после подтверждения наличия',
+  specialTerms: 'поставка зависит от наличия на складе; спорные позиции требуют проверки перед выпуском',
 }
 
-const defaultOfferServiceTotals: DemoOfferTableTotal[] = [
-  {
-    id: 'offer-transport',
-    label: 'ТРАНСПОРТНЫЕ РАСХОДЫ',
-    grandTotal: 83605.29,
-    tone: 'service',
-  },
-  {
-    id: 'offer-setup',
-    label: 'ОРГАНИЗАЦИЯ РАБОТ НА ОБЪЕКТЕ',
-    grandTotal: 12480,
-    tone: 'service',
-  },
-]
+const defaultOfferServiceTotals: DemoOfferTableTotal[] = []
 
 function sumOfferAmounts(items: DemoOfferTableItem[]) {
   return items.reduce(
     (accumulator, item) => {
-      const productTotal = item.quantity * item.unitPrice
-      const installationTotal = item.quantity * item.installationUnitPrice
+      const purchaseTotal = item.quantity * getEffectivePurchaseUnitPrice(item)
+      const saleTotal = item.quantity * item.installationUnitPrice
 
       return {
-        productTotal: accumulator.productTotal + productTotal,
-        installationTotal: accumulator.installationTotal + installationTotal,
-        grandTotal: accumulator.grandTotal + productTotal + installationTotal,
+        productTotal: accumulator.productTotal + purchaseTotal,
+        installationTotal: accumulator.installationTotal + saleTotal,
+        grandTotal: accumulator.grandTotal + saleTotal - purchaseTotal,
       }
     },
     {
@@ -195,24 +166,17 @@ function buildOfferTotals(
   serviceTotals: DemoOfferTableTotal[] = defaultOfferServiceTotals,
 ): DemoOfferTableTotal[] {
   const subtotal = sumOfferAmounts(items)
-  const serviceGrandTotal = serviceTotals.reduce((accumulator, total) => accumulator + total.grandTotal, 0)
 
   return [
     {
       id: 'offer-subtotal',
-      label: 'ИТОГО',
+      label: 'ИТОГО ПО ТОВАРАМ',
       productTotal: subtotal.productTotal,
       installationTotal: subtotal.installationTotal,
       grandTotal: subtotal.grandTotal,
       tone: 'subtotal',
     },
     ...serviceTotals.map((total) => ({ ...total })),
-    {
-      id: 'offer-final',
-      label: 'ИТОГО, ВКЛЮЧАЯ ДОСТАВКУ И МОНТАЖ',
-      grandTotal: subtotal.grandTotal + serviceGrandTotal,
-      tone: 'final',
-    },
   ]
 }
 
@@ -223,7 +187,12 @@ export function createEmptyOfferTable(): DemoOfferTable {
   }
 }
 
+function getVerticalProductUrl(item: DemoOfferTableItem, index = 0) {
+  return resolveVerticalProductUrl(item, index)
+}
+
 export function recalculateOfferTable(offerTable: DemoOfferTable): DemoOfferTable {
+  const items = offerTable.items.map((item) => applyKpPriceAdjustments(item))
   const serviceTotals = offerTable.totals
     .filter((total) => total.tone === 'service')
     .map((total) => ({
@@ -235,7 +204,8 @@ export function recalculateOfferTable(offerTable: DemoOfferTable): DemoOfferTabl
 
   return {
     ...offerTable,
-    totals: buildOfferTotals(offerTable.items, serviceTotals.length ? serviceTotals : defaultOfferServiceTotals),
+    items,
+    totals: buildOfferTotals(items, serviceTotals.length ? serviceTotals : defaultOfferServiceTotals),
   }
 }
 
@@ -243,97 +213,181 @@ export function getDemoOfferTable(): DemoOfferTable {
   const items: DemoOfferTableItem[] = [
     {
       id: 'offer-mnemo',
+      sourceNeed: 'Мнемосхема тактильная полноцветная 610x470 мм, рельеф и Брайль, 1 шт.',
       description:
         'Мнемосхема тактильная полноцветная с рельефом и дублированием шрифтом Брайля, защитное покрытие, формат 610x470 мм.',
+      productCode: 'VRT-610-470-BR',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=2318',
+      unit: 'шт',
       quantity: 1,
       unitPrice: 18640,
-      installationUnitPrice: 1650,
+      installationUnitPrice: 25400,
+      minSalePrice: 22370,
+      maxSalePrice: 29800,
+      marketBenchmark: 26800,
+      reviewStatus: 'готово',
+      managerComment: 'Совпадение по формату и исполнению.',
     },
     {
       id: 'offer-sign-set',
+      sourceNeed: 'Тактильные пиктограммы для входа и маршрута, комплект 4 шт.',
       description:
         'Комплект тактильных пиктограмм для входной группы и основных точек маршрута: вход, направление движения, кнопка вызова, зона ожидания.',
+      productCode: 'VRT-PIC-SET-04',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=1772',
+      unit: 'шт',
       quantity: 4,
       unitPrice: 742.35,
-      installationUnitPrice: 315,
+      installationUnitPrice: 1190,
+      minSalePrice: 940,
+      maxSalePrice: 1420,
+      marketBenchmark: 1250,
+      reviewStatus: 'подтверждено',
+      managerComment: 'Можно оставить в КП без доп. уточнений.',
     },
     {
       id: 'offer-contrast-tape',
+      sourceNeed: 'Контрастная лента желтая, ширина 100 мм, 18 м.',
       description:
         'Лента контрастная для маркировки ступеней и дверных проемов, самоклеящаяся, желтая, ширина 100 мм.',
+      productCode: 'VRT-TAPE-100-Y',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=6261',
+      unit: 'м',
       quantity: 18,
       unitPrice: 684.1,
-      installationUnitPrice: 420,
+      installationUnitPrice: 990,
+      minSalePrice: 820,
+      maxSalePrice: 1180,
+      marketBenchmark: 1040,
+      reviewStatus: 'готово',
+      managerComment: 'Проверить фактический метраж перед выпуском.',
     },
     {
       id: 'offer-tactile-tile',
+      sourceNeed: 'Тактильная плитка предупреждающая наружная 300x300 мм, 24 шт.',
       description:
         'Плитка тактильная предупреждающая, полиуретановая, наружное исполнение, размер 300x300 мм.',
+      productCode: 'VRT-TILE-PU-300',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=2483',
+      unit: 'шт',
       quantity: 24,
       unitPrice: 1952.75,
-      installationUnitPrice: 735,
+      installationUnitPrice: 2840,
+      minSalePrice: 2380,
+      maxSalePrice: 3260,
+      marketBenchmark: 2950,
+      reviewStatus: 'цена требует проверки',
+      managerComment: 'Представительскую цену лучше сверить в личном кабинете.',
     },
     {
       id: 'offer-nosing',
+      sourceNeed: 'Противоскользящие накладки на ступени 1000 мм, 11 шт.',
       description:
         'Накладка на ступень противоскользящая в алюминиевом профиле с контрастной вставкой, длина 1000 мм.',
+      productCode: 'VRT-NOS-AL-1000',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=3893',
+      unit: 'шт',
       quantity: 11,
       unitPrice: 1909.95,
-      installationUnitPrice: 682.5,
+      installationUnitPrice: 2760,
+      minSalePrice: 2310,
+      maxSalePrice: 3180,
+      marketBenchmark: 2890,
+      reviewStatus: 'готово',
+      managerComment: 'Подходит по длине, цвет вставки уточнить.',
     },
     {
       id: 'offer-call-button',
+      sourceNeed: 'Антивандальная кнопка вызова со стойкой, 1 комплект.',
       description:
         'Антивандальная кнопка вызова со стойкой крепления и базовой индикацией для входной зоны.',
+      productCode: 'VRT-CALL-AV-STD',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=5754',
+      unit: 'компл.',
       quantity: 1,
       unitPrice: 4875.9,
-      installationUnitPrice: 1260,
+      installationUnitPrice: 7200,
+      minSalePrice: 5850,
+      maxSalePrice: 8400,
+      marketBenchmark: 7600,
+      reviewStatus: 'нужно уточнить',
+      managerComment: 'Нужно подтвердить тип питания и место установки.',
     },
     {
       id: 'offer-loop',
+      sourceNeed: 'Индукционная система для посетителей с нарушением слуха, 1 комплект.',
       description:
         'Переносная индукционная система для обслуживания посетителей с нарушением слуха, портативный комплект.',
+      productCode: 'VRT-LOOP-MOB',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=1526',
+      unit: 'компл.',
       quantity: 1,
       unitPrice: 23184.55,
-      installationUnitPrice: 0,
+      installationUnitPrice: 32900,
+      minSalePrice: 27820,
+      maxSalePrice: 38200,
+      marketBenchmark: 34500,
+      reviewStatus: 'цена требует проверки',
+      managerComment: 'Цена зависит от наличия. Не выпускать без сверки.',
     },
     {
       id: 'offer-handrail',
+      sourceNeed: 'Двухуровневые поручни из нержавеющей стали, 12,5 м.',
       description:
         'Ограждение с двухуровневыми поручнями, нержавеющая сталь, напольное исполнение, основной марш и площадка.',
+      productCode: 'VRT-HR-SS-2L',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=8368',
+      unit: 'м',
       quantity: 12.5,
       unitPrice: 18900,
-      installationUnitPrice: 8400,
+      installationUnitPrice: 26700,
+      minSalePrice: 22680,
+      maxSalePrice: 31500,
+      marketBenchmark: 28400,
+      reviewStatus: 'нужно уточнить',
+      managerComment: 'Метраж и крепления зависят от фактического основания.',
     },
     {
-      id: 'offer-dismantle-rail',
-      description: 'Демонтаж существующих металлических ограждений по линии прохода.',
-      quantity: 8,
-      unitPrice: 0,
-      installationUnitPrice: 500,
+      id: 'offer-accessible-entrance-sign',
+      sourceNeed: 'Тактильная табличка доступный вход с Брайлем, 2 шт.',
+      description:
+        'Тактильная табличка "Доступный вход" с рельефным обозначением и дублированием шрифтом Брайля, контрастное исполнение.',
+      productCode: 'VRT-SIGN-ENTRY-BR',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=1772',
+      unit: 'шт',
+      quantity: 2,
+      unitPrice: 1780,
+      installationUnitPrice: 2590,
+      minSalePrice: 2140,
+      maxSalePrice: 3010,
+      marketBenchmark: 2740,
+      reviewStatus: 'готово',
+      managerComment: 'Позиция соответствует табличкам доступного входа с Брайлем.',
     },
     {
-      id: 'offer-dismantle-tile',
-      description: 'Демонтаж существующей тактильной плитки на проблемных участках маршрута.',
-      quantity: 1.62,
-      unitPrice: 0,
-      installationUnitPrice: 500,
-    },
-    {
-      id: 'offer-dismantle-step',
-      description: 'Демонтаж существующих накладок на ступени с подготовкой основания под новый монтаж.',
-      quantity: 4.5,
-      unitPrice: 0,
-      installationUnitPrice: 150,
+      id: 'offer-mobile-ramp-1200',
+      sourceNeed: 'Перекатной алюминиевый пандус 1200 мм, 1 шт.',
+      description:
+        'Пандус перекатной алюминиевый для преодоления порогов и небольших перепадов высоты, длина 1200 мм, противоскользящая поверхность.',
+      productCode: 'VRT-RAMP-AL-MOB-1200',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=277',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 13800,
+      installationUnitPrice: 18900,
+      minSalePrice: 16560,
+      maxSalePrice: 22000,
+      marketBenchmark: 20100,
+      reviewStatus: 'готово',
+      managerComment: 'Грязная позиция напрямую сопоставлена с перекатным алюминиевым пандусом 1200 мм.',
     },
   ]
 
-  const subtotal = sumOfferAmounts(items)
-  const transportTotal = 83605.29
-  const setupTotal = 12480
+  const syncedItems = items.map((item) => applyKpPriceAdjustments(attachVerticalProductData(item)))
+  const subtotal = sumOfferAmounts(syncedItems)
 
   return {
-    items,
+    items: syncedItems,
     totals: [
       {
         id: 'offer-subtotal',
@@ -343,23 +397,542 @@ export function getDemoOfferTable(): DemoOfferTable {
         grandTotal: subtotal.grandTotal,
         tone: 'subtotal',
       },
+    ],
+  }
+}
+
+function createOfferTableFromItems(items: DemoOfferTableItem[]): DemoOfferTable {
+  const syncedItems = items.map((item) => applyKpPriceAdjustments(attachVerticalProductData(item)))
+
+  return {
+    items: syncedItems,
+    totals: buildOfferTotals(syncedItems),
+  }
+}
+
+function getSanitaryRoomDemoOfferTable(): DemoOfferTable {
+  return createOfferTableFromItems([
+    {
+      id: 'offer-san-folding-rail',
+      sourceNeed: 'Откидные поручни для санузла, 800 мм, нержавейка, 2 шт.',
+      description:
+        'Поручень опорный откидной настенный для санитарной комнаты, нержавеющая сталь, длина 800 мм, с крепежной пластиной.',
+      productCode: 'VRT-HND-FOLD-800',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=2430',
+      unit: 'шт',
+      quantity: 2,
+      unitPrice: 10450,
+      installationUnitPrice: 13900,
+      minSalePrice: 12540,
+      maxSalePrice: 16200,
+      marketBenchmark: 14800,
+      reviewStatus: 'готово',
+      managerComment: 'Позиция соответствует запросу: откидной поручень 800 мм для санузла.',
+    },
+    {
+      id: 'offer-san-wall-rail-600',
+      sourceNeed: 'Прямые настенные поручни 600 мм у раковины и унитаза, 4 шт.',
+      description:
+        'Поручень прямой настенный для санитарных помещений, нержавеющая сталь, длина 600 мм, скрытое крепление.',
+      productCode: 'VRT-HND-WALL-600',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=110',
+      unit: 'шт',
+      quantity: 4,
+      unitPrice: 3820,
+      installationUnitPrice: 5280,
+      minSalePrice: 4580,
+      maxSalePrice: 6120,
+      marketBenchmark: 5600,
+      reviewStatus: 'готово',
+      managerComment: 'Количество и длина перенесены из грязной заявки без изменения смысла.',
+    },
+    {
+      id: 'offer-san-corner-rail',
+      sourceNeed: 'Угловой поручень 700 на 700 мм, 1 шт.',
+      description:
+        'Поручень угловой настенный 90 градусов для санитарной комнаты, нержавеющая сталь, размер 700x700 мм.',
+      productCode: 'VRT-HND-COR-700',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=7674',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 8420,
+      installationUnitPrice: 11400,
+      minSalePrice: 10100,
+      maxSalePrice: 13200,
+      marketBenchmark: 12100,
+      reviewStatus: 'готово',
+      managerComment: 'Грязная позиция напрямую сопоставлена с угловым поручнем 700x700 мм.',
+    },
+    {
+      id: 'offer-san-shower-seat',
+      sourceNeed: 'Откидное сиденье для душа настенное, 1 шт.',
+      description:
+        'Сиденье для душа откидное настенное для МГН, влагостойкое исполнение, усиленная рама, настенный монтаж.',
+      productCode: 'VRT-SEAT-SH-FOLD',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=4711',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 12600,
+      installationUnitPrice: 16900,
+      minSalePrice: 15120,
+      maxSalePrice: 19800,
+      marketBenchmark: 18100,
+      reviewStatus: 'готово',
+      managerComment: 'Сохранен тип изделия: откидное настенное сиденье для душевой зоны.',
+    },
+    {
+      id: 'offer-san-tilt-mirror',
+      sourceNeed: 'Зеркало наклонное для доступного санузла 600x800, 1 шт.',
+      description:
+        'Зеркало наклонное для санитарной комнаты МГН, размер 600x800 мм, с регулируемым углом наклона.',
+      productCode: 'VRT-MIR-TILT-600-800',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=7897',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 7150,
+      installationUnitPrice: 9800,
+      minSalePrice: 8580,
+      maxSalePrice: 11400,
+      marketBenchmark: 10400,
+      reviewStatus: 'готово',
+      managerComment: 'Размер и назначение совпадают с грязной заявкой.',
+    },
+    {
+      id: 'offer-san-call-cord',
+      sourceNeed: 'Кнопка вызова помощи со шнурком в туалет, 1 комплект.',
+      description:
+        'Комплект кнопки вызова помощи для санитарной комнаты со шнуровым приводом, световой индикацией и приемным блоком.',
+      productCode: 'VRT-CALL-WC-CORD',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=8378',
+      unit: 'компл.',
+      quantity: 1,
+      unitPrice: 11800,
+      installationUnitPrice: 15800,
+      minSalePrice: 14160,
+      maxSalePrice: 18400,
+      marketBenchmark: 16900,
+      reviewStatus: 'нужно уточнить',
+      managerComment: 'Нужно уточнить состав комплекта: приемник, табло, тип питания.',
+    },
+    {
+      id: 'offer-san-braille-signs',
+      sourceNeed: 'Таблички туалет МГН с Брайлем, 2 шт.',
+      description:
+        'Тактильная табличка для санитарной комнаты МГН с рельефно-точечным шрифтом Брайля и контрастным обозначением.',
+      productCode: 'VRT-SIGN-WC-BR',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=1789',
+      unit: 'шт',
+      quantity: 2,
+      unitPrice: 1640,
+      installationUnitPrice: 2360,
+      minSalePrice: 1970,
+      maxSalePrice: 2750,
+      marketBenchmark: 2480,
+      reviewStatus: 'готово',
+      managerComment: 'Запрос на таблички с Брайлем сохранен в профессиональном наименовании.',
+    },
+    {
+      id: 'offer-san-crutch-holder',
+      sourceNeed: 'Держатель костылей настенный, 1 шт.',
+      description:
+        'Держатель костылей настенный для санитарной комнаты и зоны ожидания, металлическое исполнение, настенный монтаж.',
+      productCode: 'VRT-HOLD-CRUTCH',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=8090',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 2450,
+      installationUnitPrice: 3480,
+      minSalePrice: 2940,
+      maxSalePrice: 4050,
+      marketBenchmark: 3700,
+      reviewStatus: 'готово',
+      managerComment: 'Позиция напрямую соответствует держателю костылей.',
+    },
+    {
+      id: 'offer-san-lever-mixer',
+      sourceNeed: 'Смеситель локтевой на раковину, 1 шт.',
+      description:
+        'Смеситель локтевой для раковины санитарной комнаты МГН, однорычажное исполнение с удлиненной рукояткой.',
+      productCode: 'VRT-MIX-ELBOW',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=1185',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 6900,
+      installationUnitPrice: 9650,
+      minSalePrice: 8280,
+      maxSalePrice: 11200,
+      marketBenchmark: 10300,
+      reviewStatus: 'готово',
+      managerComment: 'Грязное название уточнено до локтевого смесителя для раковины МГН.',
+    },
+    {
+      id: 'offer-san-anti-slip-roll',
+      sourceNeed: 'Противоскользящее покрытие для влажной зоны, 8 м2.',
+      description:
+        'Противоскользящее рулонное покрытие для влажных зон, износостойкое исполнение, поставка по площади 8 м2.',
+      productCode: 'VRT-FLOOR-AS-WET',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=6734',
+      unit: 'м2',
+      quantity: 8,
+      unitPrice: 2140,
+      installationUnitPrice: 3190,
+      minSalePrice: 2570,
+      maxSalePrice: 3710,
+      marketBenchmark: 3400,
+      reviewStatus: 'цена требует проверки',
+      managerComment: 'Площадь оставлена из заявки, перед выпуском проверить фактический метраж.',
+    },
+    {
+      id: 'offer-san-accessible-toilet',
+      sourceNeed: 'Унитаз для МГН с увеличенным вылетом, 1 шт.',
+      description:
+        'Унитаз напольный для санитарной комнаты МГН с увеличенным вылетом чаши и возможностью бокового пересаживания.',
+      productCode: 'VRT-WC-MGN-LONG',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=2936',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 18400,
+      installationUnitPrice: 24800,
+      minSalePrice: 22080,
+      maxSalePrice: 28900,
+      marketBenchmark: 26500,
+      reviewStatus: 'готово',
+      managerComment: 'Тип изделия соответствует заявке: унитаз для МГН с увеличенным вылетом.',
+    },
+    {
+      id: 'offer-san-accessible-sink',
+      sourceNeed: 'Раковина для МГН с фронтальным подъездом, 1 шт.',
+      description:
+        'Раковина доступная для МГН с фронтальным подъездом инвалидной коляски, эргономичная форма чаши, настенный монтаж.',
+      productCode: 'VRT-SINK-MGN-FRONT',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=1180',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 13200,
+      installationUnitPrice: 18400,
+      minSalePrice: 15840,
+      maxSalePrice: 21400,
+      marketBenchmark: 19600,
+      reviewStatus: 'готово',
+      managerComment: 'Запрос на раковину для МГН сохранен в профессиональном наименовании.',
+    },
+    {
+      id: 'offer-san-flat-siphon',
+      sourceNeed: 'Поручень защиты слива под доступную раковину, 1 шт.',
+      description:
+        'Поручень опорный для защиты слива раковины, нержавеющая сталь с полиамидными окончаниями, для доступной санитарной комнаты.',
+      productCode: 'VRT-SIPHON-FLAT-MGN',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=5256',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 2860,
+      installationUnitPrice: 4380,
+      minSalePrice: 3430,
+      maxSalePrice: 5100,
+      marketBenchmark: 4680,
+      reviewStatus: 'готово',
+      managerComment: 'Позиция связана с доступной раковиной и соответствует карточке защиты слива на Вертикаль.',
+    },
+    {
+      id: 'offer-san-soap-dispenser',
+      sourceNeed: 'Дозатор мыла сенсорный настенный, 1 шт.',
+      description:
+        'Дозатор жидкого мыла сенсорный настенный для санитарной комнаты, бесконтактная подача, антивандальный корпус.',
+      productCode: 'VRT-DISP-SOAP-SENS',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=1189',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 4120,
+      installationUnitPrice: 5960,
+      minSalePrice: 4940,
+      maxSalePrice: 6940,
+      marketBenchmark: 6350,
+      reviewStatus: 'готово',
+      managerComment: 'Грязная строка сопоставлена с настенным сенсорным дозатором мыла.',
+    },
+    {
+      id: 'offer-san-paper-holder',
+      sourceNeed: 'Держатель туалетной бумаги настенный, 1 шт.',
+      description:
+        'Держатель туалетной бумаги настенный для санитарной комнаты МГН, усиленное металлическое исполнение.',
+      productCode: 'VRT-HOLD-PAPER-WC',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=5762',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 1980,
+      installationUnitPrice: 2860,
+      minSalePrice: 2380,
+      maxSalePrice: 3330,
+      marketBenchmark: 3060,
+      reviewStatus: 'готово',
+      managerComment: 'Позиция сохранена как настенный держатель туалетной бумаги.',
+    },
+    {
+      id: 'offer-san-clothes-hook',
+      sourceNeed: 'Крючки для одежды настенные, 2 шт.',
+      description:
+        'Крючок для одежды настенный для санитарной комнаты МГН, металлическое исполнение, безопасная скругленная форма.',
+      productCode: 'VRT-HOOK-WALL-MGN',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=1197',
+      unit: 'шт',
+      quantity: 2,
+      unitPrice: 980,
+      installationUnitPrice: 1480,
+      minSalePrice: 1180,
+      maxSalePrice: 1720,
+      marketBenchmark: 1580,
+      reviewStatus: 'готово',
+      managerComment: 'Количество и назначение совпадают с грязной заявкой.',
+    },
+    {
+      id: 'offer-san-hand-dryer',
+      sourceNeed: 'Сушилка для рук бесконтактная, 1 шт.',
+      description:
+        'Электросушилка для рук бесконтактная настенная, автоматическое включение, корпус для общественных санитарных помещений.',
+      productCode: 'VRT-DRYER-HAND-SENS',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=5555',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 9800,
+      installationUnitPrice: 13700,
+      minSalePrice: 11760,
+      maxSalePrice: 15900,
+      marketBenchmark: 14600,
+      reviewStatus: 'готово',
+      managerComment: 'Грязная позиция соответствует бесконтактной настенной сушилке для рук.',
+    },
+    {
+      id: 'offer-san-door-handle',
+      sourceNeed: 'Опорный поручень-скоба для зоны двери санузла, 1 шт.',
+      description:
+        'Поручень опорный двойной для санитарной комнаты МГН, настенно-напольное исполнение, сталь, D38 мм.',
+      productCode: 'VRT-HANDLE-DOOR-400',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=400',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 3420,
+      installationUnitPrice: 4860,
+      minSalePrice: 4110,
+      maxSalePrice: 5650,
+      marketBenchmark: 5180,
+      reviewStatus: 'готово',
+      managerComment: 'Грязная строка уточнена до опорного поручня, который реально есть в каталоге Вертикаль.',
+    },
+  ])
+}
+
+function getNavigationEntranceDemoOfferTable(): DemoOfferTable {
+  return createOfferTableFromItems([
+    {
+      id: 'offer-nav-guide-strip',
+      sourceNeed: 'Тактильная направляющая полоса по коридору, 46 м.',
+      description:
+        'Тактильная направляющая полоса ПВХ для помещений, ширина 35 мм, контрастное исполнение, поставка по метражу.',
+      productCode: 'VRT-GUIDE-PVC-35',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=1445',
+      unit: 'м',
+      quantity: 46,
+      unitPrice: 520,
+      installationUnitPrice: 760,
+      minSalePrice: 625,
+      maxSalePrice: 890,
+      marketBenchmark: 810,
+      reviewStatus: 'готово',
+      managerComment: 'Коридорная направляющая полоса сохранена как тактильная ПВХ полоса по метражу.',
+    },
+    {
+      id: 'offer-nav-warning-indicators',
+      sourceNeed: 'Индикаторы конусы перед лестницами и дверями, 350 шт.',
+      description:
+        'Тактильный индикатор предупреждающий конусный для помещений, самоклеящееся исполнение, комплектная поставка 350 шт.',
+      productCode: 'VRT-IND-CONE-INT',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=5011',
+      unit: 'шт',
+      quantity: 350,
+      unitPrice: 74,
+      installationUnitPrice: 118,
+      minSalePrice: 89,
+      maxSalePrice: 138,
+      marketBenchmark: 126,
+      reviewStatus: 'готово',
+      managerComment: 'Количество индикаторов и зона применения соответствуют заявке.',
+    },
+    {
+      id: 'offer-nav-mnemo-800',
+      sourceNeed: 'Большая мнемосхема у входа 800x600, 1 шт.',
+      description:
+        'Мнемосхема тактильная полноцветная с рельефом и шрифтом Брайля, защитное покрытие, формат 800x600 мм.',
+      productCode: 'VRT-MNEMO-800-600-BR',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=4040',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 24700,
+      installationUnitPrice: 32900,
+      minSalePrice: 29640,
+      maxSalePrice: 38200,
+      marketBenchmark: 35000,
+      reviewStatus: 'готово',
+      managerComment: 'Грязная заявка просит большую мнемосхему, в КП стоит полноцветная 800x600 с Брайлем.',
+    },
+    {
+      id: 'offer-nav-room-signs',
+      sourceNeed: 'Таблички с Брайлем на кабинеты, 18 шт.',
+      description:
+        'Тактильная навигационная табличка на кабинет с рельефным текстом и шрифтом Брайля, индивидуальная печать.',
+      productCode: 'VRT-SIGN-ROOM-BR',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=2737',
+      unit: 'шт',
+      quantity: 18,
+      unitPrice: 1280,
+      installationUnitPrice: 1960,
+      minSalePrice: 1540,
+      maxSalePrice: 2280,
+      marketBenchmark: 2100,
+      reviewStatus: 'готово',
+      managerComment: 'Количество кабинетов сохранено, изделие уточнено до тактильной таблички с Брайлем.',
+    },
+    {
+      id: 'offer-nav-glass-marking',
+      sourceNeed: 'Контрастные круги/полосы на стеклянные двери, 6 дверей.',
+      description:
+        'Комплект контрастной маркировки для стеклянных дверей: круговые маркеры и горизонтальные полосы для 6 дверных полотен.',
+      productCode: 'VRT-GLASS-MARK-06',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=2829',
+      unit: 'компл.',
+      quantity: 1,
+      unitPrice: 8600,
+      installationUnitPrice: 12800,
+      minSalePrice: 10320,
+      maxSalePrice: 14900,
+      marketBenchmark: 13600,
+      reviewStatus: 'готово',
+      managerComment: 'Запрос на 6 дверей сохранен как комплект маркировки на 6 дверных полотен.',
+    },
+    {
+      id: 'offer-nav-threshold-ramp',
+      sourceNeed: 'Пороговые резиновые пандусы 25 мм, ширина 900, 3 шт.',
+      description:
+        'Пандус пороговый резиновый, высота 25 мм, ширина 900 мм, противоскользящая поверхность.',
+      productCode: 'VRT-RAMP-RUB-25-900',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=6817',
+      unit: 'шт',
+      quantity: 3,
+      unitPrice: 5350,
+      installationUnitPrice: 7450,
+      minSalePrice: 6420,
+      maxSalePrice: 8650,
+      marketBenchmark: 7900,
+      reviewStatus: 'готово',
+      managerComment: 'Размеры порогового пандуса перенесены из заявки.',
+    },
+    {
+      id: 'offer-nav-wireless-call',
+      sourceNeed: 'Кнопка вызова у входа с беспроводным приемником, 1 комплект.',
+      description:
+        'Комплект беспроводной кнопки вызова помощи для входной группы с приемником, индикацией и креплением.',
+      productCode: 'VRT-CALL-WL-ENTRY',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=5754',
+      unit: 'компл.',
+      quantity: 1,
+      unitPrice: 14300,
+      installationUnitPrice: 19400,
+      minSalePrice: 17160,
+      maxSalePrice: 22600,
+      marketBenchmark: 20700,
+      reviewStatus: 'нужно уточнить',
+      managerComment: 'Нужно подтвердить расстояние до приемника и питание.',
+    },
+    {
+      id: 'offer-nav-audio-beacon',
+      sourceNeed: 'Звуковой маяк на главный вход, 1 шт.',
+      description:
+        'Звуковой маяк для обозначения главного входа, программируемое голосовое сообщение, настенное исполнение.',
+      productCode: 'VRT-BEACON-AUDIO',
+      productUrl: 'https://tiflocentre.ru/magazin/view_product.php?id=497',
+      unit: 'шт',
+      quantity: 1,
+      unitPrice: 15400,
+      installationUnitPrice: 21900,
+      minSalePrice: 18480,
+      maxSalePrice: 25500,
+      marketBenchmark: 23300,
+      reviewStatus: 'цена требует проверки',
+      managerComment: 'Позиция соответствует звуковому маяку входной группы, цену сверить перед выпуском.',
+    },
+  ])
+}
+
+export interface KpDemoScenario {
+  id: 'demo-1' | 'demo-2' | 'demo-3'
+  title: string
+  requestText: string
+  offerTable: DemoOfferTable
+}
+
+function createDemoScenarioRequest(offerTable: DemoOfferTable) {
+  return offerTable.items.map((item) => item.sourceNeed).join('\n')
+}
+
+export function getKpDemoScenarios(): KpDemoScenario[] {
+  const accessibilityRoute = getDemoOfferTable()
+  const sanitaryRoom = getSanitaryRoomDemoOfferTable()
+  const navigationEntrance = getNavigationEntranceDemoOfferTable()
+
+  return [
+    {
+      id: 'demo-1',
+      title: 'Доступный маршрут',
+      requestText: createDemoScenarioRequest(accessibilityRoute),
+      offerTable: accessibilityRoute,
+    },
+    {
+      id: 'demo-2',
+      title: 'Санузел МГН',
+      requestText: createDemoScenarioRequest(sanitaryRoom),
+      offerTable: sanitaryRoom,
+    },
+    {
+      id: 'demo-3',
+      title: 'Вход и навигация',
+      requestText: createDemoScenarioRequest(navigationEntrance),
+      offerTable: navigationEntrance,
+    },
+  ]
+}
+
+function getInitialKpOfferTable(): DemoOfferTable {
+  const items: DemoOfferTableItem[] = [
+    {
+      id: 'offer-battery-casil',
+      sourceNeed:
+        'Аккумуляторная батарея для лестничного гусеничного подъемника "Барс-УГП 130" - 2 шт.',
+      description:
+        'Аккумуляторная батарея (CASIL CA12120 2 12 В / 12 Ач, F2 10601042) для лестничного гусеничного подъемника "Барс-УГП 130"',
+      productCode: 'CASIL-CA12120',
+      unit: 'шт',
+      quantity: 2,
+      unitPrice: 5619,
+      installationUnitPrice: 5619,
+      minSalePrice: 5619,
+      maxSalePrice: 5619,
+      marketBenchmark: 5619,
+      reviewStatus: 'готово',
+      managerComment: '',
+    },
+  ]
+  const pricedItems = items.map((item) => applyKpPriceAdjustments(item))
+  const subtotal = sumOfferAmounts(pricedItems)
+
+  return {
+    items: pricedItems,
+    totals: [
       {
-        id: 'offer-transport',
-        label: 'ТРАНСПОРТНЫЕ РАСХОДЫ',
-        grandTotal: transportTotal,
-        tone: 'service',
-      },
-      {
-        id: 'offer-setup',
-        label: 'ОРГАНИЗАЦИЯ РАБОТ НА ОБЪЕКТЕ',
-        grandTotal: setupTotal,
-        tone: 'service',
-      },
-      {
-        id: 'offer-final',
-        label: 'ИТОГО, ВКЛЮЧАЯ ДОСТАВКУ И МОНТАЖ',
-        grandTotal: subtotal.grandTotal + transportTotal + setupTotal,
-        tone: 'final',
+        id: 'offer-subtotal',
+        label: 'ИТОГО',
+        productTotal: subtotal.productTotal,
+        installationTotal: subtotal.installationTotal,
+        grandTotal: subtotal.grandTotal,
+        tone: 'subtotal',
       },
     ],
   }
@@ -386,6 +959,52 @@ function makeCellAnnotation(
   }
 }
 
+function getProductMatchCheck(item: DemoOfferTableItem) {
+  const checks: Record<string, string> = {
+    'offer-mnemo':
+      'Сверить в карточке формат 610x470 мм, наличие рельефа и Брайля, тип защитного покрытия и полноцветное исполнение.',
+    'offer-sign-set':
+      'Проверить, что в комплект входят 4 пиктограммы именно для входа, направления движения, кнопки вызова и зоны ожидания.',
+    'offer-contrast-tape':
+      'Сверить ширину 100 мм, желтый цвет, самоклеящуюся основу и пригодность для маркировки ступеней и дверных проемов.',
+    'offer-tactile-tile':
+      'Проверить размер 300x300 мм, наружное исполнение, полиуретан и предупреждающий тип рифления.',
+    'offer-nosing':
+      'Сверить длину 1000 мм, алюминиевый профиль, противоскользящую вставку и нужный контрастный цвет.',
+    'offer-call-button':
+      'Проверить, что это антивандальная кнопка со стойкой, базовой индикацией и подходящим типом питания.',
+    'offer-loop':
+      'Сверить состав переносного комплекта: усилитель, приемный контур, кабели/зарядка и совместимость с зоной обслуживания.',
+    'offer-handrail':
+      'Проверить двухуровневое исполнение, нержавеющую сталь, напольное крепление и применимость для марша и площадки.',
+  }
+
+  return checks[item.id] ?? `Сверить, что карточка соответствует строке: ${item.description}`
+}
+
+function getManagerControlCheck(item: DemoOfferTableItem) {
+  const checks: Record<string, string> = {
+    'offer-mnemo':
+      'Перед выпуском подтвердить макет, адрес/планировку, язык Брайля и срок изготовления у поставщика.',
+    'offer-sign-set':
+      'Проверить, не нужны ли дополнительные пиктограммы по маршруту и совпадает ли количество с планом объекта.',
+    'offer-contrast-tape':
+      'Пересчитать фактический метраж по ступеням и дверным проемам, добавить запас на подрезку при необходимости.',
+    'offer-tactile-tile':
+      'Сверить количество плиток по зонам предупреждения и актуальность представительской цены в личном кабинете.',
+    'offer-nosing':
+      'Подтвердить количество ступеней, цвет контрастной вставки и способ крепления перед отправкой клиенту.',
+    'offer-call-button':
+      'Уточнить место установки, питание, необходимость приемника/табло и монтаж к стойке или стене.',
+    'offer-loop':
+      'Не выпускать без проверки наличия, версии комплекта и цены: позиция чувствительна к составу поставки.',
+    'offer-handrail':
+      'Подтвердить фактический метраж и тип основания по месту.',
+  }
+
+  return checks[item.id] ?? item.managerComment
+}
+
 export function getDemoDraftCellAnnotations(
   branch: DemoDocumentType,
 ): Partial<Record<DraftCellId, DraftCellAnnotation>> {
@@ -397,7 +1016,13 @@ export function getDemoDraftCellAnnotations(
   const annotations: Partial<Record<DraftCellId, DraftCellAnnotation>> = {}
 
   offerTable.items.forEach((item, index) => {
-    const baseNote = `Позиция ${index + 1} собрана из демонстрационного набора материалов и монтажных работ.`
+    const productLink = getVerticalProductUrl(item, index)
+    const selectionReason = item.productCode
+      ? getProductMatchCheck(item)
+      : 'Автоподбор не смог уверенно выбрать товар: в потребности не хватает артикула, состава комплекта и параметров монтажа.'
+    const controlNote = item.productCode
+      ? getManagerControlCheck(item)
+      : 'Нужно вручную уточнить состав комплекта и только после этого привязать строку к карточке Вертикаль.'
     const descriptionId = `kp-item:${item.id}:description` as DraftCellId
     const quantityId = `kp-item:${item.id}:quantity` as DraftCellId
     const unitPriceId = `kp-item:${item.id}:unitPrice` as DraftCellId
@@ -407,24 +1032,27 @@ export function getDemoDraftCellAnnotations(
     const grandTotalId = `kp-item:${item.id}:grandTotal` as DraftCellId
 
     annotations[descriptionId] = makeCellAnnotation(descriptionId, [
-      makeCellSource('Демо-позиция', 'note', baseNote),
-      makeCellSource('Фото и замеры', 'photo', 'Описание опирается на нейтральные фото зоны и лист замеров.'),
+      makeCellSource('Ссылка на товар', 'price', productLink),
+      makeCellSource('Проверить в карточке', 'note', selectionReason),
+      makeCellSource('Перед выпуском КП', 'note', controlNote),
     ])
 
     annotations[quantityId] = makeCellAnnotation(quantityId, [
-      makeCellSource('Ведомость объёмов', 'note', `Количество ${item.quantity} зафиксировано как стартовый объём для демонстрации.`),
+      makeCellSource('Потребность', 'note', `Количество ${item.quantity} извлечено из исходной потребности.`),
     ])
 
     annotations[unitPriceId] = makeCellAnnotation(
       unitPriceId,
       [
-        makeCellSource('Демо-прайс', 'price', 'Цена товара взята из демонстрационного прайс-листа и требует ручной сверки.'),
+        makeCellSource('Ссылка на товар', 'price', productLink),
+        makeCellSource('Источник цены', 'price', 'Представительская цена подтянута из демо-карточки Вертикаль и показана как будущий формат интеграции.'),
+        makeCellSource('Что проверить', 'note', 'Сверить ценовую группу, НДС и актуальность складского остатка перед отправкой клиенту.'),
       ],
       item.id === 'offer-loop'
         ? {
             severity: 'high',
-            title: 'Проверить цену поставщика',
-            summary: 'По этой позиции цена чувствительна к наличию и бренду, нужна ручная перепроверка.',
+            title: 'Проверить техническое соответствие комплекта',
+            summary: 'У переносной индукционной системы в карточке Вертикаль не подтверждены состав комплекта, версия усилителя и тип приемного контура. Без сверки есть риск заложить цену на неполную модификацию.',
           }
         : undefined,
     )
@@ -432,27 +1060,27 @@ export function getDemoDraftCellAnnotations(
     annotations[installationPriceId] = makeCellAnnotation(
       installationPriceId,
       [
-        makeCellSource('Монтажная оценка', 'note', 'Стоимость монтажа собрана из типового окна работ и логистики бригады.'),
+        makeCellSource('Авторасчет', 'note', 'Целевая цена продажи предложена системой и может быть изменена менеджером.'),
       ],
       item.id === 'offer-handrail'
         ? {
             severity: 'medium',
-            title: 'Уточнить сложность монтажа',
-            summary: 'Монтаж может измениться после уточнения основания и узлов крепления.',
+            title: 'Проверить целевую цену',
+            summary: 'Цена зависит от фактического метража и выбранного исполнения.',
           }
         : undefined,
     )
 
     annotations[productTotalId] = makeCellAnnotation(productTotalId, [
-      makeCellSource('Авторасчёт', 'note', 'Сумма товара считается автоматически: количество × цена товара.'),
+      makeCellSource('Авторасчет', 'note', 'Сумма закупки считается автоматически: количество x представительская цена.'),
     ])
 
     annotations[installationTotalId] = makeCellAnnotation(installationTotalId, [
-      makeCellSource('Авторасчёт', 'note', 'Сумма монтажа считается автоматически: количество × цена монтажа.'),
+      makeCellSource('Авторасчет', 'note', 'Сумма продажи считается автоматически: количество x целевая цена продажи.'),
     ])
 
     annotations[grandTotalId] = makeCellAnnotation(grandTotalId, [
-      makeCellSource('Авторасчёт', 'note', 'Итог по строке складывается из суммы товара и суммы монтажа.'),
+      makeCellSource('Авторасчет', 'note', 'Прибыль по строке считается как разница продажи и закупки.'),
     ])
   })
 
@@ -464,7 +1092,7 @@ export function getDemoDraftCellAnnotations(
         'note',
         total.tone === 'service'
           ? 'Значение заведено как отдельная сервисная строка и проверяется вручную.'
-          : 'Итоговый блок считается автоматически на основе строк таблицы.',
+          : 'Итоговый блок считается автоматически на основе строк рабочей таблицы КП.',
       ),
     ])
   })
@@ -473,12 +1101,12 @@ export function getDemoDraftCellAnnotations(
   annotations[dueDateId] = makeCellAnnotation(
     dueDateId,
     [
-      makeCellSource('Коммерческие вводные', 'note', 'Срок берётся из рабочего окна проекта и подтверждается вручную перед отправкой.'),
+      makeCellSource('Коммерческие вводные', 'note', 'Срок действия КП и поставки подтверждается вручную перед отправкой.'),
     ],
     {
       severity: 'medium',
-      title: 'Подтвердить рабочее окно',
-      summary: 'Перед финальной отправкой нужно сверить срок с фактическим графиком объекта.',
+      title: 'Подтвердить наличие',
+      summary: 'Перед финальной отправкой нужно сверить доступность ключевых товарных позиций.',
     },
   )
 
@@ -518,10 +1146,12 @@ function getTodayLocalDate() {
 
 export function createEmptyExportForm() {
   return {
+    documentTitle: '1-В',
     counterpartyName: '',
     counterpartyAddress: '',
     objectAddress: '',
     documentDate: getTodayLocalDate(),
+    documentNumber: '1-В',
     signatoryName: '',
     manualNotes: '',
   } satisfies DemoState['exportForm']
@@ -529,13 +1159,15 @@ export function createEmptyExportForm() {
 
 export function createDemoExportForm() {
   return {
+    documentTitle: '1-В',
     counterpartyName: 'ООО "Городская среда"',
     counterpartyAddress: 'Москва, ул. Новая Басманная, д. 14, стр. 2',
     objectAddress: 'Москва, Ленинский проспект, д. 52, входная группа поликлиники',
     documentDate: getTodayLocalDate(),
+    documentNumber: '1-В',
     signatoryName: 'Иванов Сергей Петрович',
     manualNotes:
-      'Демо-реквизиты для финального экспорта. В реальном сценарии эти данные сотрудник уточняет перед выпуском документа.',
+      'Пример реквизитов для финального экспорта. В рабочем сценарии эти данные сотрудник уточняет перед выпуском документа.',
   } satisfies DemoState['exportForm']
 }
 
@@ -565,13 +1197,21 @@ export function getDefaultSectionId(branch: DemoDocumentType) {
 export function getDemoNeedText(branch: DemoDocumentType, pipelineName: string) {
   void pipelineName
   if (branch === 'kp') {
-    return `Нужно привести входную группу в рабочее и понятное состояние для маломобильных посетителей. Сейчас на входе слишком крутой подъём, неудобный подход к двери, старое металлическое ограждение и скользкое покрытие перед входом. Заказчик хочет решить вопрос без полной перестройки крыльца, но так, чтобы объект выглядел аккуратно и им можно было пользоваться в обычном режиме.
+    return `Мнемосхема тактильная полноцветная 610x470 мм, рельеф и Брайль - 1 шт.
 
-Нужно предусмотреть демонтаж того, что сейчас мешает нормальному проходу: старого ограждения, повреждённых участков покрытия и элементов, которые сужают проход. Далее предложить новый узел входа: нормальный пандус или более удобное решение по подъёму, новые поручни с двух сторон, нескользящее покрытие, понятную организацию подхода к двери и безопасный заезд без резких перепадов.
+Тактильные пиктограммы для входа и маршрута - комплект 4 шт.
 
-Также нужно заложить закупку основных позиций: металлоконструкции для поручней и ограждений, покрытие для наружного применения, крепёж, доборные элементы, при необходимости тактильные обозначения и таблички. Если где-то требуется подливка, выравнивание основания, локальный ремонт ступеней или площадки перед входом, это тоже нужно включить в состав работ.
+Контрастная лента желтая, ширина 100 мм - 18 м.
 
-Важно, чтобы решение было без избыточной сложности: объект действующий, работы нужно выполнить поэтапно, без долгого перекрытия входа. Нужен понятный перечень того, что демонтируем, что изготавливаем или закупаем, что монтируем на месте и какой итоговый результат должен получить заказчик.`
+Тактильная плитка предупреждающая наружная 300x300 мм - 24 шт.
+
+Противоскользящие накладки на ступени 1000 мм - 11 шт.
+
+Антивандальная кнопка вызова со стойкой - 1 комплект.
+
+Индукционная система для посетителей с нарушением слуха - 1 комплект.
+
+Двухуровневые поручни из нержавеющей стали - 12,5 м.`
   }
 
   return `Нужно зафиксировать состав работ по входной группе и маршруту прохода. Требуется убрать мешающие элементы, привести основание и подход к двери в рабочее состояние, предусмотреть безопасное перемещение маломобильных посетителей и исключить резкие перепады по высоте на основном пути движения.
@@ -583,7 +1223,7 @@ export function getDemoNeedText(branch: DemoDocumentType, pipelineName: string) 
 
 export function getDemoNotes(branch: DemoDocumentType) {
   if (branch === 'kp') {
-    return 'Клиент рассматривает предложение как ориентир для первого согласования, поэтому стоимость лучше держать в нижней рабочей границе без лишних запасов и необязательных позиций. Если возможны разные варианты исполнения, в основу ставить надежное и аккуратное решение без избыточного удорожания, а улучшения при необходимости выносить отдельно. Сроки показывать стандартные, без ускоренного монтажа, но с учетом того, что вход действующий и работы желательно выполнять поэтапно.'
+    return 'КП собрать строго по перечню товаров. Строки с неполным составом и зависимостью от наличия оставить на проверку менеджера перед финальным выпуском.'
   }
 
   return 'При подготовке ТЗ важно учесть измеримые параметры, рабочее окно монтажа и обязательность нейтральных формулировок без персональных ссылок.'
@@ -597,7 +1237,7 @@ export function getDemoMaterials(): DemoAsset[] {
       subtitle: 'Общий ракурс объекта',
       kind: 'photo',
       source: 'upload',
-      note: 'Помогает визуально показать конфигурацию зоны входа на демонстрации.',
+      note: 'Помогает быстро показать конфигурацию зоны входа и опорные детали проекта.',
       addedAt: '2026-04-02T09:02:00.000Z',
       previewUrl: '/demo/clinic-entrance.svg',
     },
@@ -614,7 +1254,7 @@ export function getDemoMaterials(): DemoAsset[] {
     {
       id: 'asset-note-measure',
       title: 'Лист измерений',
-      subtitle: 'Демонстрационный файл',
+      subtitle: 'Рабочий файл',
       kind: 'file',
       source: 'office',
       note: 'Содержит пример нейтральных замеров без адресов, ФИО и контрагентов.',
@@ -679,9 +1319,9 @@ export function getDemoSourceOptions(): DemoSourceOption[] {
     },
     {
       id: 'source-campus',
-      title: 'Пайплайн по общественной входной зоне',
-      summary: 'Нейтральный демонстрационный кейс с акцентом на измеримые параметры и структуру решения.',
-      statusLabel: 'Демонстрационный шаблон',
+      title: 'Общественная входная зона',
+      summary: 'Нейтральный рабочий кейс с акцентом на измеримые параметры и структуру решения.',
+      statusLabel: 'Рабочий шаблон',
       badgeTone: 'progress',
     },
   ]
@@ -701,6 +1341,8 @@ export function getDemoDraftSections(
   branch: DemoDocumentType,
   pipelineName: string,
 ): DraftSection[] {
+  void pipelineName
+
   if (branch === 'kp') {
     return [
       {
@@ -709,34 +1351,34 @@ export function getDemoDraftSections(
         summary: 'Коротко фиксируем, зачем запускается пайплайн и какой результат ожидается.',
         documentType: 'kp',
         content: [
-          `Пайплайн «${pipelineName}» запускается для подготовки обезличенного коммерческого предложения по объекту.`,
-          'В документе фиксируются цель проекта, ожидаемый результат и границы будущей коммерческой упаковки.',
+          'Документ собирается как рабочее коммерческое предложение на поставку товаров.',
+          'В документе фиксируются исходная потребность, найденные товары, цены и строки, требующие проверки менеджером.',
           'Финальные реквизиты, контрагенты и персональные данные будут добавлены человеком на завершающем этапе.',
         ],
         table: {
-          title: 'Сводная таблица',
-          columns: ['Позиция', 'Что входит', 'Ед.', 'Кол-во', 'Комментарий'],
+          title: 'Сводка потребности',
+          columns: ['Позиция', 'Характеристики', 'Ед.', 'Кол-во', 'Комментарий'],
           rows: [
-            ['Подготовка зоны', 'Демонтаж старых элементов и расчистка подхода', 'этап', '1', 'Стартовый блок перед монтажом'],
-            ['Пандусный узел', 'Каркас, настил и примыкание к входной площадке', 'комплект', '1', 'Базовое решение для демо-сборки'],
-            ['Поручни', 'Двусторонние поручни с крепежом', 'линия', '2', 'Полный контур сопровождения'],
-            ['Покрытие', 'Нескользящее наружное покрытие', 'зона', '1', 'Для основной траектории движения'],
-            ['Сопутствующие работы', 'Подгонка основания и финишная сборка', 'этап', '1', 'Закрывает демонстрационный объем'],
+            ['Мнемосхема', 'Полноцветная, рельеф и Брайль, 610x470 мм', 'шт', '1', 'Формат и исполнение заданы'],
+            ['Тактильные пиктограммы', 'Комплект для входа и маршрута', 'шт', '4', 'Можно оставить без доп. уточнений'],
+            ['Контрастная лента', 'Желтая, ширина 100 мм', 'м', '18', 'Метраж проверить перед выпуском'],
+            ['Тактильная плитка', 'Предупреждающая, наружная, 300x300 мм', 'шт', '24', 'Цена требует сверки'],
+            ['Поручни и накладки', 'Поручни 12,5 м, накладки 1000 мм - 11 шт.', 'набор', '1', 'Метраж и крепления на уточнение'],
           ],
         },
       },
       {
         id: 'kp-materials',
-        title: '2. Материалы и опорные данные',
-        summary: 'Отмечаем, какие входные данные использовались при подготовке черновика.',
+        title: '2. Подбор товаров',
+        summary: 'Отмечаем, какие вводные использовались при подготовке черновика.',
         documentType: 'kp',
         stats: [
-          { label: 'Материалы', value: '4 демонстрационных источника' },
-          { label: 'Формат', value: 'обезличенный рабочий пакет' },
+          { label: 'Товарные строки', value: '8 позиций' },
+          { label: 'Формат', value: 'рабочая таблица КП' },
         ],
         content: [
-          'В основу предложения вошли фотографии зоны, лист измерений и примеры конструктивных узлов.',
-          'Все материалы используются только как безопасные демонстрационные входные данные без привязки к персоналиям.',
+          'В основу предложения вошел список товаров, количества и ключевые характеристики из потребности.',
+          'Система подобрала позиции на Вертикаль и отметила строки, где требуется проверить цену, наличие или состав комплекта.',
         ],
       },
       {
@@ -763,7 +1405,7 @@ export function getDemoDraftSections(
       summary: 'Показываем, из каких вводных строится техническое задание.',
       documentType: 'tz',
       content: [
-        `Пайплайн «${pipelineName}» переводится в формат технического задания на базе нейтральной проектной основы.`,
+        'Документ переводится в формат технического задания на базе нейтральной проектной основы.',
         'Документ описывает цель, измеримые параметры и требования к структуре итогового решения.',
       ],
       table: {
@@ -797,8 +1439,8 @@ export function getDemoDraftSections(
       summary: 'Фиксируем условия, которые влияют на подготовку и последующую реализацию.',
       documentType: 'tz',
       stats: [
-        { label: 'Срок', value: '{{dueDate}}' },
-        { label: 'Условия', value: '{{specialTerms}}' },
+        { label: 'Срок', value: 'до 10 рабочих дней после подтверждения сценария' },
+        { label: 'Условия', value: 'работы планируются по согласованному окну без раскрытия персональных данных' },
       ],
       content: [
         'Документ формулируется без упоминания заказчика, контрагента и иных персональных атрибутов.',
@@ -812,17 +1454,17 @@ export function getDemoDraftIssues(branch: DemoDocumentType): QAFlag[] {
   if (branch === 'kp') {
     return [
       {
-        id: 'issue-window',
-        title: 'Подтвердить рабочее окно',
+        id: 'issue-availability',
+        title: 'Подтвердить наличие',
         severity: 'medium',
-        summary: 'Стоит ещё раз проверить, что временной слот для работ согласуется с внутренним графиком объекта.',
+        summary: 'Стоит ещё раз проверить наличие тактильной плитки, индукционной системы и поручней перед отправкой КП.',
         relatedSectionId: 'kp-conditions',
       },
       {
-        id: 'issue-terms',
-        title: 'Проверить формулировку условий',
+        id: 'issue-handrail-length',
+        title: 'Проверить метраж поручней',
         severity: 'low',
-        summary: 'Финальный текст лучше сократить до одной ясной формулировки перед экспортом.',
+        summary: 'Метраж поручней лучше подтвердить по объекту до финального выпуска.',
         relatedSectionId: 'kp-conditions',
       },
     ]
@@ -850,26 +1492,26 @@ export function getDemoDraftSources(branch: DemoDocumentType): SourceLink[] {
   if (branch === 'kp') {
     return [
       {
-        id: 'source-material-photo',
-        label: 'Фото зоны проекта',
-        sourceType: 'photo',
-        excerpt: 'Визуальный материал помогает быстро показать исходную конфигурацию объекта.',
-        relatedSectionId: 'kp-materials',
+        id: 'source-need-list',
+        label: 'Потребность',
+        sourceType: 'note',
+        excerpt: 'Список товаров и количеств использован как основа для рабочей таблицы КП.',
+        relatedSectionId: 'kp-overview',
         confidence: 'high',
       },
       {
-        id: 'source-material-sheet',
-        label: 'Лист измерений',
+        id: 'source-vertical',
+        label: 'Подбор на Вертикаль',
         sourceType: 'note',
-        excerpt: 'Нейтральный файл с основными параметрами использован как демонстрационная опора.',
+        excerpt: 'Товары, коды и представительские цены подтянуты из рабочего источника Вертикаль.',
         relatedSectionId: 'kp-materials',
-        confidence: 'high',
+        confidence: 'medium',
       },
       {
         id: 'source-terms',
         label: 'Вводные по условиям',
         sourceType: 'note',
-        excerpt: 'Свободная заметка пользователя учитывается в коммерческой части и согласовании.',
+        excerpt: 'Комментарий пользователя учитывается в коммерческой части и статусах проверки.',
         relatedSectionId: 'kp-conditions',
         confidence: 'medium',
       },
@@ -879,7 +1521,7 @@ export function getDemoDraftSources(branch: DemoDocumentType): SourceLink[] {
   return [
     {
       id: 'source-base',
-      label: 'Демонстрационная основа из КП',
+      label: 'Основа из КП',
       sourceType: 'note',
       excerpt: 'Используется как нейтральная проектная база для формирования ТЗ.',
       relatedSectionId: 'tz-overview',
@@ -905,6 +1547,8 @@ export function getDemoDraftSources(branch: DemoDocumentType): SourceLink[] {
 }
 
 export function createInitialDemoState(): DemoState {
+  const initialPipelineName = 'Товарное КП'
+
   return {
     cases: [
       {
@@ -929,7 +1573,15 @@ export function createInitialDemoState(): DemoState {
       completedAt: null,
       stages: getRunStageBlueprints('kp'),
     },
-    draft: JSON.parse(JSON.stringify(emptyDraft)) as DemoDraft,
+    draft: {
+      ...(JSON.parse(JSON.stringify(emptyDraft)) as DemoDraft),
+      fields: getDemoDraftFields(),
+      sections: getDemoDraftSections('kp', initialPipelineName),
+      offerTable: getInitialKpOfferTable(),
+      cellAnnotations: {},
+      issues: [],
+      sources: [],
+    },
     nextPipelineNumber: 1,
     selectedDocumentType: 'kp',
     selectedSectionId: getDefaultSectionId('kp'),
@@ -938,13 +1590,13 @@ export function createInitialDemoState(): DemoState {
     exportGeneration: createEmptyExportGeneration(),
     recentOperations: [],
     currentBranchStage: {
-      kp: 'need',
+      kp: 'editor',
       tz: 'source',
     },
     branchProgress: {
       kp: {
-        currentStageId: 'need',
-        completedStageIds: [],
+        currentStageId: 'editor',
+        completedStageIds: ['need', 'materials', 'comments', 'run'],
       },
       tz: {
         currentStageId: 'source',
@@ -954,15 +1606,17 @@ export function createInitialDemoState(): DemoState {
     selectedSourceKpId: null,
     branchLaunch: {
       kp: {
-        started: false,
-        pipelineName: '',
+        started: true,
+        pipelineName: initialPipelineName,
       },
       tz: {
         started: false,
         pipelineName: '',
       },
     },
-    demoAppliedByPage: {},
+    demoAppliedByPage: {
+      'kp-draft': true,
+    },
   } satisfies DemoState
 }
 
@@ -1014,7 +1668,7 @@ export function createExportArtifact(format: ExportArtifact['format']) {
   return {
     id: `export-${format.toLowerCase()}-${stamp}`,
     format,
-    fileName: `NuOperator-${format.toLowerCase()}-${stamp}.${extension}`,
+    fileName: `Вертикаль-КП-${format.toLowerCase()}-${stamp}.${extension}`,
     createdAt: timestamp,
     status: 'generated',
   } satisfies ExportArtifact

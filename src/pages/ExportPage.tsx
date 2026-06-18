@@ -11,6 +11,7 @@ import { Link, Navigate, useParams } from 'react-router-dom'
 import { Button, Eyebrow, Panel, ProgressBar, StatusPill, fieldStyles } from '../components/ui'
 import { useDemo } from '../context/DemoContext'
 import { draftPath } from '../lib/routes'
+import { PageTransition } from '../components/PageTransition'
 import { getBranchLabel } from '../lib/workflow'
 import type { DemoDocumentType, DemoPageKey, ExportFormat } from '../types/demo'
 
@@ -27,19 +28,19 @@ const exportCards: Array<{
   {
     format: 'DOCX',
     title: 'Word',
-    caption: 'Редактируемый файл для финальной полировки и печати.',
+    caption: 'Редактируемое КП для финальной полировки и печати.',
     icon: FileText,
   },
   {
     format: 'PDF',
     title: 'PDF',
-    caption: 'Готовый для презентации файл для отправки, согласования и показа.',
+    caption: 'Готовое КП для отправки, согласования и показа.',
     icon: FileType2,
   },
   {
     format: 'XLSX',
     title: 'Excel',
-    caption: 'Структурированная выгрузка для расчётов, смет и коммерческих приложений.',
+    caption: 'Табличное приложение с товарными строками и итогами.',
     icon: FileSpreadsheet,
   },
 ]
@@ -54,7 +55,7 @@ function getFormatLabel(format: ExportFormat | null) {
 export function ExportPage() {
   const { branch, exportId } = useParams()
   const {
-    state: { cases, exportForm, exportGeneration, branchLaunch, demoAppliedByPage },
+    state: { cases, exportForm, exportGeneration },
     applyDemoVariant,
     updateExportField,
     startExportGeneration,
@@ -71,9 +72,6 @@ export function ExportPage() {
     ? cases.find((demoCase) => demoCase.exportId === exportId) ?? cases[0]
     : null
   const pageKey = resolveExportPageKey(activeBranch)
-  const hasDemoVariant = !!demoAppliedByPage[pageKey]
-  const pipelineName = branchLaunch[activeBranch].pipelineName
-
   useEffect(() => {
     if (!isValidBranch) {
       return
@@ -134,81 +132,55 @@ export function ExportPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <Panel tone="gold" className="rounded-[34px] p-6 md:p-8">
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr),360px]">
-          <div className="space-y-4">
-            <Eyebrow>{getBranchLabel(activeBranch)} / Экспорт</Eyebrow>
+    <PageTransition className="space-y-5">
+      <Panel tone="gold" className="rounded-[26px] p-4 md:p-5">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr),300px]">
+          <div className="space-y-3">
+            <Eyebrow>{getBranchLabel(activeBranch)} / Финальное КП</Eyebrow>
             <div className="max-w-3xl">
-              <h1 className="display-title text-5xl text-[var(--ink-950)] md:text-[4rem]">
-                Финальный выпуск документа
+              <h1 className="display-title text-4xl text-[var(--ink-950)] md:text-[3rem]">
+                Финальное КП
               </h1>
-              <p className="mt-4 text-sm leading-8 text-[var(--ink-800)] md:text-base">
-                Этот экран завершает сценарий: ручные реквизиты, выбор формата и аккуратная
-                генерация финального артефакта.
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--ink-800)]">
+                Проверьте, какие строки готовы к выпуску, заполните реквизиты и сформируйте
+                чистый документ без внутренних статусов и рабочих комментариев.
               </p>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="executive-card rounded-[24px] p-4">
+            <div className="grid max-w-xl gap-3">
+              <div className="executive-card rounded-[18px] p-3">
                 <div className="relative">
-                  <div className="text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">
-                    Пайплайн
-                  </div>
-                  <div className="mt-2 text-lg font-semibold text-[var(--ink-950)]">
-                    {pipelineName || 'Демо-пайплайн'}
-                  </div>
-                </div>
-              </div>
-              <div className="executive-card rounded-[24px] p-4">
-                <div className="relative">
-                  <div className="text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--ink-500)]">
                     Дата документа
                   </div>
-                  <div className="mt-2 text-lg font-semibold text-[var(--ink-950)]">
+                  <div className="mt-1.5 text-base font-semibold text-[var(--ink-950)]">
                     {exportForm.documentDate || 'Заполните вручную'}
-                  </div>
-                </div>
-              </div>
-              <div className="executive-card gold-highlight rounded-[24px] p-4">
-                <div className="relative">
-                  <div className="text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">
-                    Статус
-                  </div>
-                  <div className="mt-2 text-lg font-semibold text-[var(--ink-950)]">
-                    {exportGeneration.status === 'idle'
-                      ? 'Готово к генерации'
-                      : exportGeneration.status === 'generating'
-                        ? 'Идёт подготовка файла'
-                        : `Подготовлен ${getFormatLabel(exportGeneration.selectedFormat)}`}
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="executive-card gold-highlight rounded-[30px] p-5">
+          <div className="executive-card gold-highlight rounded-[22px] p-3.5">
             <div className="relative">
-              <div className="flex items-center gap-3">
-                <div className="accent-icon-block rounded-2xl p-3 text-[var(--accent-amber-strong)]">
-                  <Sparkles size={20} />
+              <div className="flex items-center gap-2.5">
+                <div className="accent-icon-block rounded-xl p-2.5 text-[var(--accent-amber-strong)]">
+                  <Sparkles size={16} />
                 </div>
                 <div>
-                  <div className="font-semibold text-[var(--ink-950)]">Демо-шаг выпуска</div>
-                  <div className="text-sm text-[var(--ink-700)]">
-                    Заполняет презентационные реквизиты, чтобы экспорт выглядел завершённым на
-                    живой встрече.
+                  <div className="text-sm font-semibold text-[var(--ink-950)]">Подготовка КП</div>
+                  <div className="text-xs leading-5 text-[var(--ink-700)]">
+                    Заполняет реквизиты и подготавливает итоговый документ к выпуску.
                   </div>
                 </div>
               </div>
 
               <Button
-                className="mt-5 w-full justify-center"
-                variant="secondary"
+                className="mt-3 px-3 py-1.5 text-xs"
+                variant="ghost"
                 onClick={() => applyDemoVariant(pageKey)}
               >
-                <Sparkles size={16} />
-                {hasDemoVariant ? 'Обновить демо-данные' : 'Применить демо-вариант'}
+                Демо
               </Button>
             </div>
           </div>
@@ -221,7 +193,7 @@ export function ExportPage() {
             <div>
               <div className="text-xl font-semibold text-[var(--ink-950)]">Ручные реквизиты</div>
               <div className="mt-1 text-sm text-[var(--ink-700)]">
-                Эти поля остаются под контролем человека перед финальным экспортом.
+                Эти поля остаются под контролем человека перед формированием финального КП.
               </div>
             </div>
             <StatusPill tone="attention">Ручной ввод</StatusPill>
@@ -279,7 +251,7 @@ export function ExportPage() {
             </label>
 
             <label className="block">
-              <div className="text-sm font-semibold text-[var(--ink-950)]">Комментарий</div>
+              <div className="text-sm font-semibold text-[var(--ink-950)]">Служебная пометка</div>
               <input
                 value={exportForm.manualNotes}
                 onChange={(event) => updateExportField('manualNotes', event.target.value)}
@@ -292,9 +264,9 @@ export function ExportPage() {
 
         <div className="space-y-6">
           <Panel className="rounded-[32px] p-6">
-            <div className="text-xl font-semibold text-[var(--ink-950)]">Выберите формат экспорта</div>
+            <div className="text-xl font-semibold text-[var(--ink-950)]">Сформировать КП</div>
             <div className="mt-2 text-sm leading-7 text-[var(--ink-700)]">
-              Выберите тип файла, и система запустит демонстрационный сценарий генерации.
+              Выберите формат, и система подготовит чистый документ для клиента.
             </div>
 
             <div className="mt-6 space-y-3">
@@ -346,23 +318,23 @@ export function ExportPage() {
                 <div className="text-sm text-[var(--ink-700)]">
                   {exportGeneration.selectedFormat
                     ? `Формат: ${getFormatLabel(exportGeneration.selectedFormat)}`
-                    : 'Сначала выберите формат экспорта.'}
+                    : 'Сначала выберите формат КП.'}
                 </div>
               </div>
             </div>
 
             {exportGeneration.status === 'idle' ? (
               <div className="surface-dashed mt-6 rounded-[24px] p-5 text-sm leading-7 text-[var(--ink-700)]">
-                Генерация ещё не запускалась. После выбора формата здесь появится экран
-                прогресса и выдачи результата.
+                Формирование ещё не запускалось. После выбора формата здесь появится прогресс и
+                выдача результата.
               </div>
             ) : (
               <div className="mt-6 space-y-5">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-sm font-medium text-[var(--ink-950)]">
                     {exportGeneration.status === 'generating'
-                      ? 'Система заполняет фирменный шаблон и готовит финальный файл.'
-                      : 'Файл готов для демонстрационной загрузки.'}
+                      ? 'Система заполняет шаблон КП и готовит финальный файл.'
+                      : 'Файл готов к загрузке.'}
                   </div>
                   <div className="text-sm font-semibold text-[var(--brand-700)]">
                     {exportGeneration.progressPercent}%
@@ -390,13 +362,13 @@ export function ExportPage() {
 
                 {exportGeneration.status === 'ready' &&
                 exportGeneration.generatedArtifact ? (
-                  <div className="space-y-4 rounded-[26px] border border-emerald-500/24 bg-[linear-gradient(180deg,rgba(36,96,73,0.28),rgba(20,48,37,0.18))] p-5">
+                  <div className="space-y-4 rounded-[26px] border border-blue-500/25 bg-[linear-gradient(180deg,rgba(37,99,235,0.14),rgba(15,23,42,0.06))] p-5">
                     <div>
                       <div className="text-base font-semibold text-[var(--ink-950)]">
                         Документ {getFormatLabel(exportGeneration.generatedArtifact.format)} готов
                       </div>
                       <div className="mt-1 text-sm leading-6 text-[var(--ink-700)]">
-                        Файл сформирован из демонстрационного шаблона и ждёт скачивания в интерфейсе.
+                        Файл сформирован и готов к скачиванию в интерфейсе.
                       </div>
                       <div className="mt-3 text-xs uppercase tracking-[0.16em] text-[var(--ink-500)]">
                         {exportGeneration.generatedArtifact.fileName}
@@ -426,10 +398,10 @@ export function ExportPage() {
             to={draftPath(activeBranch, demoCase.draftId)}
             className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-[var(--border-soft)] bg-[rgba(255,248,234,0.02)] px-4 py-3 text-sm font-semibold text-[var(--ink-950)] transition hover:-translate-y-0.5 hover:border-[var(--border-strong)] hover:bg-[var(--surface-muted)]"
           >
-            Назад в редактор
+            Назад в рабочую таблицу
           </Link>
         </div>
       </section>
-    </div>
+    </PageTransition>
   )
 }

@@ -1,13 +1,13 @@
-# NuOperator Demo Frontend
+# Вертикаль КП Demo Frontend
 
-Локальный demo-фронтенд для презентации NuOperator на переговорах.
+Локальный demo-фронтенд для презентации подготовки подробных КП по товарам Вертикаль из неструктурированных заявок.
 
 ## Запуск
 
 Откройте PowerShell в папке проекта:
 
 ```powershell
-cd c:\Users\[ИМЯ_ПОЛЬЗОВАТЕЛЯ]\Desktop\NuOperator\frontend
+cd c:\Users\[ИМЯ_ПОЛЬЗОВАТЕЛЯ]\Desktop\NuOperatorFix\NuOperator
 npm install
 npm run dev
 ```

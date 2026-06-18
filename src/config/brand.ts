@@ -1,9 +1,9 @@
 export const brandConfig = {
-  logo: 'NO',
-  companyName: 'NuOperator',
+  logo: 'ВК',
+  companyName: 'Вертикаль КП',
   primaryColor: '#284c61',
   productTagline:
-    'Из заявки, фото и замеров — в согласованное КП/ТЗ за 30 минут',
-  documentHeader: 'Демо-комплект документов по объекту',
+    'Из грязной заявки - в подробное КП по товарам Вертикаль',
+  documentHeader: 'Демо-комплект КП по товарам Вертикаль',
   signatureBlock: 'Директор ООО «Безбарьерная среда»',
 } as const

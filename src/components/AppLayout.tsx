@@ -1,8 +1,10 @@
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
+import { FileInput, FileSpreadsheet, Send } from 'lucide-react'
 import { useDemo } from '../context/DemoContext'
-import { branchSelectionPath, defaultCaseStagePath } from '../lib/routes'
+import { branchSelectionPath, caseStagePath, draftPath, exportPath } from '../lib/routes'
 import { type DemoDocumentType, type DemoWorkflowStageId } from '../types/demo'
 import { ProgressStepper } from './ProgressStepper'
+import { ResetDemoButton } from './ResetDemoButton'
 import { WorkspaceSidebar } from './WorkspaceSidebar'
 
 function resolveStageId(pathname: string): DemoWorkflowStageId {
@@ -19,7 +21,12 @@ function resolveStageId(pathname: string): DemoWorkflowStageId {
   }
 
   const lastSegment = pathname.split('/').at(-1)
-  if (lastSegment === 'source' || lastSegment === 'need' || lastSegment === 'materials' || lastSegment === 'comments') {
+  if (
+    lastSegment === 'source' ||
+    lastSegment === 'need' ||
+    lastSegment === 'materials' ||
+    lastSegment === 'comments'
+  ) {
     return lastSegment
   }
 
@@ -30,11 +37,11 @@ export function AppLayout() {
   const location = useLocation()
   const { branch, caseId, runId, draftId, exportId } = useParams()
   const {
-    state: { cases, run, draft, branchProgress, recentOperations, branchLaunch },
+    state: { cases, run, draft, branchProgress, branchLaunch },
     resetDemo,
   } = useDemo()
 
-  const isValidBranch = branch === 'kp' || branch === 'tz'
+  const isValidBranch = branch === 'kp'
   const activeBranch = (isValidBranch ? branch : 'kp') as DemoDocumentType
   const activeCase =
     cases.find((demoCase) => demoCase.id === caseId) ??
@@ -57,47 +64,52 @@ export function AppLayout() {
     return <Navigate to={branchSelectionPath()} replace />
   }
 
-  const pipelineLinks = (['kp', 'tz'] as const)
-    .filter((item) => branchLaunch[item].started)
-    .map((item) => ({
-      branch: item,
-      pipelineName: branchLaunch[item].pipelineName,
-      to: defaultCaseStagePath(item, activeCase.id),
-    }))
+  const sidebarItems = [
+    {
+      to: caseStagePath(activeBranch, activeCase.id, 'need'),
+      label: 'Вводные',
+      hint: 'заявка или файл',
+      icon: FileInput,
+    },
+    {
+      to: draftPath(activeBranch, draft.id),
+      label: 'Таблица КП',
+      hint: 'позиции и цены',
+      icon: FileSpreadsheet,
+    },
+    {
+      to: exportPath(activeBranch, activeCase.exportId),
+      label: 'Финальное КП',
+      hint: 'готовый документ',
+      icon: Send,
+    },
+  ]
 
   return (
     <div className="relative min-h-screen overflow-hidden">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="ambient-orb ambient-orb-cyan absolute left-[-8%] top-[-6%] h-[24rem] w-[24rem] animate-[ambient-float_14s_ease-in-out_infinite]" />
-        <div className="ambient-orb ambient-orb-gold absolute right-[-8%] top-24 h-[26rem] w-[26rem] animate-[ambient-float_18s_ease-in-out_infinite]" />
-        <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,248,234,0.035),transparent_18%,transparent_82%,rgba(255,248,234,0.02))]" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(199,155,88,0.08),transparent_36%)]" />
-        <div className="paper-grid absolute inset-0 opacity-30" />
-      </div>
 
-      <div className="relative flex min-h-screen w-full items-start gap-5 px-3 py-4 md:px-4">
-        <div className="hidden w-[272px] shrink-0 xl:block">
-          <WorkspaceSidebar
-            branch={activeBranch}
-            pipelineName={branchLaunch[activeBranch].pipelineName}
-            operations={recentOperations}
-            pipelineLinks={pipelineLinks}
-            onReset={resetDemo}
-          />
+      <div className="relative mx-auto flex min-h-screen w-full max-w-none items-start gap-3 px-3 py-3 md:px-4 lg:px-5">
+        <div className="hidden w-[190px] shrink-0 xl:block">
+          <WorkspaceSidebar items={sidebarItems} />
         </div>
 
-        <div className="flex min-w-0 max-w-[1400px] flex-1 flex-col gap-6">
-          <ProgressStepper
-            branch={activeBranch}
-            caseId={activeCase.id}
-            runId={run.id}
-            draftId={draft.id}
-            exportId={activeCase.exportId}
-            currentStageId={activeLocationStage}
-            completedStageIds={branchProgress[activeBranch].completedStageIds}
-          />
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          <div className="flex min-w-0 flex-wrap items-start justify-end gap-2">
+            <div className="min-w-[260px] flex-1">
+              <ProgressStepper
+                branch={activeBranch}
+                caseId={activeCase.id}
+                runId={run.id}
+                draftId={draft.id}
+                exportId={activeCase.exportId}
+                currentStageId={activeLocationStage}
+                completedStageIds={branchProgress[activeBranch].completedStageIds}
+              />
+            </div>
+            <ResetDemoButton onReset={resetDemo} />
+          </div>
 
-          <main key={location.pathname} className="relative flex-1 pb-6">
+          <main key={location.pathname} className="relative w-full flex-1 pb-4">
             <Outlet key={location.pathname} />
           </main>
         </div>

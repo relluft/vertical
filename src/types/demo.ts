@@ -112,16 +112,34 @@ export interface DraftSection {
 export interface DemoOfferTableItem {
   id: string
   description: string
+  sourceNeed: string
+  productCode: string
+  productUrl?: string
+  unit: string
   quantity: number
   unitPrice: number
   installationUnitPrice: number
+  minSalePrice: number
+  maxSalePrice: number
+  marketBenchmark: number
+  pricingRevision?: string
+  reviewStatus: string
+  managerComment: string
 }
 
 export type OfferItemEditableField =
   | 'description'
+  | 'sourceNeed'
+  | 'productCode'
+  | 'unit'
   | 'quantity'
   | 'unitPrice'
   | 'installationUnitPrice'
+  | 'minSalePrice'
+  | 'maxSalePrice'
+  | 'marketBenchmark'
+  | 'reviewStatus'
+  | 'managerComment'
 
 export type OfferItemComputedField = 'productTotal' | 'installationTotal' | 'grandTotal'
 
@@ -203,10 +221,12 @@ export interface DemoDraft {
 }
 
 export interface DemoExportForm {
+  documentTitle: string
   counterpartyName: string
   counterpartyAddress: string
   objectAddress: string
   documentDate: string
+  documentNumber: string
   signatoryName: string
   manualNotes: string
 }

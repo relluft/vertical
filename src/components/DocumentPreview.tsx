@@ -1,5 +1,5 @@
-import { FileText, Sparkles } from 'lucide-react'
-import { brandConfig } from '../config/brand'
+import { useState } from 'react'
+import { FileText } from 'lucide-react'
 import { renderTemplate } from '../lib/utils'
 import type {
   DemoDocumentType,
@@ -28,7 +28,10 @@ export function DocumentPreview({
   selectedSectionId,
   onSelectSection,
   onUpdateOfferItem,
+  onAddOfferItem,
+  onDeleteOfferItem,
   onUpdateField,
+  onUpdateSectionStat,
   readOnly = false,
 }: {
   documentType: DemoDocumentType
@@ -40,9 +43,17 @@ export function DocumentPreview({
   selectedSectionId: string
   onSelectSection?: (sectionId: string) => void
   onUpdateOfferItem?: (itemId: string, field: OfferItemEditableField, value: string) => void
+  onAddOfferItem?: () => void
+  onDeleteOfferItem?: (itemId: string) => void
   onUpdateField?: (fieldId: DraftField['id'], value: string) => void
+  onUpdateSectionStat?: (sectionId: string, statIndex: number, value: string) => void
   readOnly?: boolean
 }) {
+  const [editingStat, setEditingStat] = useState<{ sectionId: string; statIndex: number } | null>(
+    null,
+  )
+  const [editingValue, setEditingValue] = useState('')
+
   if (documentType === 'kp') {
     return (
       <KpOfferTableEditor
@@ -51,34 +62,51 @@ export function DocumentPreview({
         cellAnnotations={cellAnnotations}
         editable={!readOnly}
         onUpdateOfferItem={onUpdateOfferItem}
+        onAddOfferItem={onAddOfferItem}
+        onDeleteOfferItem={onDeleteOfferItem}
         onUpdateField={onUpdateField}
       />
     )
   }
 
-  const filledFields = fields.filter((field) => field.value.trim())
+  const filledFields: DraftField[] = []
+  const canEditStats = !readOnly && Boolean(onUpdateSectionStat)
+
+  function beginStatEdit(sectionId: string, statIndex: number, value: string) {
+    if (!canEditStats) {
+      return
+    }
+
+    setEditingStat({ sectionId, statIndex })
+    setEditingValue(value)
+  }
+
+  function stopStatEdit() {
+    setEditingStat(null)
+    setEditingValue('')
+  }
+
+  function commitStatEdit() {
+    if (!editingStat || !onUpdateSectionStat) {
+      stopStatEdit()
+      return
+    }
+
+    onUpdateSectionStat(editingStat.sectionId, editingStat.statIndex, editingValue)
+    stopStatEdit()
+  }
 
   return (
     <div className="document-paper rounded-[34px] border border-[var(--border-soft)] p-6 md:p-8">
-      <div className="relative flex flex-col gap-4 border-b border-[var(--paper-line)] pb-6">
+      <div className="relative flex flex-col gap-4 border-b border-[var(--border-soft)] pb-6">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-          <div className="space-y-2">
-            <span className="metal-pill inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold text-[var(--ink-700)]">
-              <Sparkles size={14} className="text-[var(--accent-amber-strong)]" />
-              {brandConfig.documentHeader}
-            </span>
-            <div>
-              <h2 className="display-section-title text-4xl text-[var(--ink-950)] md:text-[2.6rem]">
-                {documentLabels[documentType]}
-              </h2>
-              <p className="mt-2 max-w-3xl text-sm leading-7 text-[var(--ink-700)]">
-                Пайплайн:{' '}
-                <span className="font-semibold text-[var(--ink-950)]">{pipelineName}</span>
-              </p>
-            </div>
+          <div>
+            <h2 className="display-section-title text-4xl text-[var(--ink-950)] md:text-[2.6rem]">
+              {documentLabels[documentType]}
+            </h2>
           </div>
           <StatusPill tone={readOnly ? 'ready' : 'progress'}>
-            {readOnly ? 'Режим согласования' : 'Редактируемый черновик'}
+            {readOnly ? 'Режим согласования' : 'Рабочая версия'}
           </StatusPill>
         </div>
 
@@ -107,7 +135,7 @@ export function DocumentPreview({
               key={section.id}
               onClick={() => onSelectSection?.(section.id)}
               tone={selectedSectionId === section.id ? 'highlight' : 'default'}
-              className={`${onSelectSection ? 'cursor-pointer' : 'cursor-default'} rounded-[28px] bg-[rgba(17,14,12,0.78)] p-5 transition-all`}
+              className={`${onSelectSection ? 'cursor-pointer' : 'cursor-default'} rounded-[28px] bg-white border border-[var(--border-soft)] p-5 transition-all`}
             >
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="space-y-2">
@@ -126,19 +154,55 @@ export function DocumentPreview({
                 </div>
                 {section.stats ? (
                   <div className="grid gap-2 sm:grid-cols-2">
-                    {section.stats.map((stat) => (
-                      <div
-                        key={`${section.id}-${stat.label}`}
-                        className="executive-card rounded-[20px] px-4 py-3"
-                      >
-                        <div className="relative">
-                          <div className="text-xs text-[var(--ink-500)]">{stat.label}</div>
-                          <div className="mt-1 text-sm font-semibold text-[var(--ink-950)]">
-                            {renderTemplate(stat.value, fields, { pipelineName })}
+                    {section.stats.map((stat, statIndex) => {
+                      const isEditing =
+                        editingStat?.sectionId === section.id &&
+                        editingStat.statIndex === statIndex
+                      const renderedValue = renderTemplate(stat.value, fields, { pipelineName })
+
+                      return (
+                        <div
+                          key={`${section.id}-${stat.label}`}
+                          className="executive-card rounded-[20px] px-4 py-3"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <div className="relative">
+                            <div className="text-xs text-[var(--ink-500)]">{stat.label}</div>
+                            {isEditing ? (
+                              <textarea
+                                autoFocus
+                                rows={2}
+                                value={editingValue}
+                                onChange={(event) => setEditingValue(event.target.value)}
+                                onBlur={commitStatEdit}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Escape') {
+                                    event.preventDefault()
+                                    stopStatEdit()
+                                  }
+
+                                  if (event.key === 'Enter' && !event.shiftKey) {
+                                    event.preventDefault()
+                                    commitStatEdit()
+                                  }
+                                }}
+                                className="executive-input mt-2 min-h-[72px] w-full resize-none px-3 py-2 text-sm font-semibold leading-6 text-[var(--ink-950)]"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => beginStatEdit(section.id, statIndex, stat.value)}
+                                className={`mt-1 w-full text-left text-sm font-semibold text-[var(--ink-950)] ${
+                                  canEditStats ? 'cursor-text' : 'cursor-default'
+                                }`}
+                              >
+                                {renderedValue}
+                              </button>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 ) : null}
               </div>

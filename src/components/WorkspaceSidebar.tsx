@@ -1,169 +1,93 @@
-import { CircleHelp, FolderHeart, RotateCcw, Settings2 } from 'lucide-react'
-import { Link } from 'react-router-dom'
-import { brandConfig } from '../config/brand'
+import type { LucideIcon } from 'lucide-react'
+import { Home } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { NavLink } from 'react-router-dom'
 import { branchSelectionPath } from '../lib/routes'
-import { formatDateTime } from '../lib/utils'
-import { getBranchLabel, getBranchShortLabel } from '../lib/workflow'
-import type { DemoDocumentType, RecentOperation } from '../types/demo'
-import { Button } from './ui'
+import { cn } from '../lib/utils'
 
-interface PipelineShortcut {
-  branch: DemoDocumentType
-  pipelineName: string
+export interface WorkspaceSidebarItem {
   to: string
+  label: string
+  hint: string
+  icon: LucideIcon
 }
 
 export function WorkspaceSidebar({
-  branch,
-  pipelineName,
-  operations,
-  pipelineLinks = [],
-  onReset,
+  items = [],
 }: {
-  branch: DemoDocumentType
-  pipelineName: string
-  operations: RecentOperation[]
-  pipelineLinks?: PipelineShortcut[]
-  onReset: () => void
+  items?: WorkspaceSidebarItem[]
 }) {
+  const links: WorkspaceSidebarItem[] = [
+    {
+      to: branchSelectionPath(),
+      label: 'Рабочая область',
+      hint: 'старт сценария',
+      icon: Home,
+    },
+    ...items,
+  ]
+
   return (
-    <aside className="frosted panel-outline sticky top-4 flex h-[calc(100vh-2rem)] w-full flex-col self-start overflow-hidden rounded-[30px] p-4">
-      <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-[linear-gradient(90deg,transparent,rgba(255,235,201,0.24),transparent)]" />
-
-      <Link to="/" className="executive-card rounded-[24px] p-3">
-        <div className="relative flex items-start gap-3">
-          <div className="brand-mark flex h-12 w-12 items-center justify-center rounded-[20px] text-base font-semibold">
-            {brandConfig.logo}
-          </div>
-          <div className="min-w-0">
-            <div className="text-base font-semibold text-[var(--ink-950)]">
-              {brandConfig.companyName}
-            </div>
-            <div className="mt-1 text-[11px] uppercase tracking-[0.18em] text-[var(--ink-500)]">
-              Приватное ИИ-рабочее пространство
-            </div>
-          </div>
-        </div>
-      </Link>
-
-      <div className="mt-4 executive-card executive-highlight rounded-[24px] p-4">
-        <div className="relative">
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--ink-500)]">
-            Активная ветка
-          </div>
-          <div className="mt-3 text-lg font-semibold text-[var(--ink-950)]">
-            {getBranchLabel(branch)}
-          </div>
-          <div className="metal-pill mt-3 inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--brand-700)]">
-            {getBranchShortLabel(branch)}
-          </div>
-          <div className="surface-note mt-4 rounded-[18px] px-3 py-3">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--ink-500)]">
-              Пайплайн
-            </div>
-            <div className="mt-2 text-sm font-semibold leading-6 text-[var(--ink-950)]">
-              {pipelineName || 'Название будет задано при старте'}
-            </div>
-          </div>
+    <aside className="frosted panel-outline sticky top-3 flex h-[calc(100vh-1.5rem)] w-full flex-col overflow-hidden rounded-[22px] px-3 py-4">
+      <div className="relative z-10 px-2">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-500)]">
+          Навигация
         </div>
       </div>
 
-      <div className="mt-4 space-y-2.5">
-        <Link
-          to={branchSelectionPath()}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-[var(--border-soft)] bg-[rgba(255,248,234,0.02)] px-4 py-2.5 text-sm font-semibold text-[var(--ink-950)] transition hover:-translate-y-0.5 hover:border-[var(--border-strong)] hover:bg-[var(--surface-muted)]"
-        >
-          <FolderHeart size={16} />
-          Выбор режима
-        </Link>
-        <Button variant="ghost" className="w-full justify-center">
-          <Settings2 size={16} />
-          Настройки
-        </Button>
-        <Button variant="ghost" className="w-full justify-center">
-          <CircleHelp size={16} />
-          Помощь
-        </Button>
-        <Button variant="secondary" className="w-full justify-center" onClick={onReset}>
-          <RotateCcw size={16} />
-          Сброс демо
-        </Button>
-      </div>
+      <nav aria-label="Основная навигация" className="relative z-10 mt-4 flex flex-col gap-1.5">
+        {links.map((item, index) => {
+          const Icon = item.icon
 
-      <div className="mt-6">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-sm font-semibold text-[var(--ink-950)]">
-            Предыдущие пайплайны
-          </div>
-          <div className="text-xs text-[var(--ink-500)]">{pipelineLinks.length} активных</div>
-        </div>
-        <div className="mt-3 space-y-2.5">
-          {pipelineLinks.length ? (
-            pipelineLinks.map((pipeline) => (
-              <Link
-                key={`${pipeline.branch}-${pipeline.to}`}
-                to={pipeline.to}
-                className="executive-card rounded-[22px] px-3.5 py-3.5"
+          return (
+            <motion.div
+              key={`${item.label}-${item.to}`}
+              initial={{ opacity: 0, x: -8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: index * 0.025 }}
+            >
+              <NavLink
+                to={item.to}
+                end={item.to === branchSelectionPath()}
+                className={({ isActive }) =>
+                  cn(
+                    'group flex min-h-12 items-center gap-3 rounded-[14px] border px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-[var(--border-strong)] hover:bg-white',
+                    isActive
+                      ? 'border-[var(--ink-950)] bg-[var(--ink-950)] text-white shadow-[var(--shadow-soft)] hover:bg-[var(--ink-950)]'
+                      : 'border-transparent bg-transparent text-[var(--ink-950)]',
+                  )
+                }
               >
-                <div className="relative">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-semibold text-[var(--ink-950)]">
-                      {getBranchLabel(pipeline.branch)}
-                    </div>
-                    <span className="metal-pill rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--brand-700)]">
-                      {getBranchShortLabel(pipeline.branch)}
+                {({ isActive }) => (
+                  <>
+                    <span
+                      className={cn(
+                        'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition',
+                        isActive
+                          ? 'border-white/20 bg-white/10 text-white'
+                          : 'border-[var(--border-soft)] bg-white text-[var(--ink-700)] group-hover:text-[var(--ink-950)]',
+                      )}
+                    >
+                      <Icon size={16} />
                     </span>
-                  </div>
-                  <div className="mt-2 text-sm leading-6 text-[var(--ink-700)]">
-                    {pipeline.pipelineName}
-                  </div>
-                </div>
-              </Link>
-            ))
-          ) : (
-            <div className="surface-dashed rounded-[22px] px-4 py-4 text-sm leading-6 text-[var(--ink-700)]">
-              Пока пусто.
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-6 flex-1 overflow-hidden">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-sm font-semibold text-[var(--ink-950)]">
-            Последние операции
-          </div>
-          <div className="text-xs text-[var(--ink-500)]">{operations.length} событий</div>
-        </div>
-        <div className="mt-3 space-y-2.5 overflow-y-auto pr-1">
-          {operations.length ? (
-            operations.map((operation) => (
-              <div key={operation.id} className="executive-card rounded-[22px] px-3.5 py-3.5">
-                <div className="relative">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-semibold text-[var(--ink-950)]">
-                      {operation.title}
-                    </div>
-                    <span className="metal-pill rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--brand-700)]">
-                      {getBranchShortLabel(operation.branch)}
+                    <span className="min-w-0 leading-tight">
+                      <span className="block truncate text-sm font-semibold">{item.label}</span>
+                      <span
+                        className={cn(
+                          'mt-0.5 block truncate text-[11px]',
+                          isActive ? 'text-white/70' : 'text-[var(--ink-600)]',
+                        )}
+                      >
+                        {item.hint}
+                      </span>
                     </span>
-                  </div>
-                  <div className="mt-2 text-sm leading-6 text-[var(--ink-700)]">
-                    {operation.description}
-                  </div>
-                  <div className="mt-3 text-xs text-[var(--ink-500)]">
-                    {formatDateTime(operation.createdAt)}
-                  </div>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="surface-dashed rounded-[22px] px-4 py-4 text-sm leading-6 text-[var(--ink-700)]">
-              Пока пусто.
-            </div>
-          )}
-        </div>
-      </div>
+                  </>
+                )}
+              </NavLink>
+            </motion.div>
+          )
+        })}
+      </nav>
     </aside>
   )
 }

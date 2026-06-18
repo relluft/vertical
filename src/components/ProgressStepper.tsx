@@ -1,3 +1,4 @@
+import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { stagePath } from '../lib/routes'
 import { cn } from '../lib/utils'
@@ -22,70 +23,76 @@ export function ProgressStepper({
   completedStageIds: DemoWorkflowStageId[]
 }) {
   const stages = getWorkflowStages(branch)
+  const visibleCompletedCount = stages.filter((stage) =>
+    completedStageIds.includes(stage.id),
+  ).length
 
   return (
-    <div className="frosted panel-outline rounded-[28px] px-4 py-4 md:px-5">
-      <div className="mb-4 flex items-center justify-between gap-4">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--ink-500)]">
-          Прогресс по этапам
+    <div className="frosted panel-outline rounded-[18px] px-2.5 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="hidden shrink-0 items-center gap-2 md:flex">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-600)]">
+            Этапы
+          </div>
+          <div className="metal-pill rounded-full px-2.5 py-1 text-[10px] font-semibold text-[var(--ink-700)]">
+            {visibleCompletedCount}/{stages.length}
+          </div>
         </div>
-        <div className="metal-pill rounded-full px-3 py-1.5 text-[11px] font-semibold text-[var(--ink-700)]">
-          {completedStageIds.length} из {stages.length} этапов отмечены
-        </div>
-      </div>
 
-      <div className="grid gap-3 lg:grid-cols-6">
-        {stages.map((stage, index) => {
-          const isActive = currentStageId === stage.id
-          const isCompleted = completedStageIds.includes(stage.id)
-          const Icon = stage.icon
+        <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto">
+          {stages.map((stage, index) => {
+            const isActive = currentStageId === stage.id
+            const isCompleted = completedStageIds.includes(stage.id)
+            const Icon = stage.icon
 
-          return (
-            <Link
-              key={stage.id}
-              to={stagePath(branch, caseId, runId, draftId, exportId, stage.id)}
-              className={cn(
-                'executive-card rounded-[22px] px-3 py-3',
-                isActive && 'executive-highlight',
-                isCompleted && !isActive && 'border-emerald-500/20',
-              )}
-            >
-              <div className="relative">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div
-                      className={cn(
-                        'rounded-[18px] border p-2',
-                        isActive
-                          ? 'border-[rgba(214,173,107,0.24)] bg-[rgba(214,173,107,0.12)] text-[var(--brand-700)]'
-                          : isCompleted
-                            ? 'border-emerald-500/22 bg-emerald-500/10 text-emerald-100'
-                            : 'border-[var(--border-soft)] bg-[rgba(255,248,234,0.03)] text-[var(--ink-700)]',
-                      )}
-                    >
-                      <Icon size={16} />
-                    </div>
-                    <div className="truncate text-sm font-semibold text-[var(--ink-950)]">
-                      {stage.label}
-                    </div>
-                  </div>
-                  <div
+            return (
+              <motion.div
+                layout
+                key={stage.id}
+                whileHover={{ y: -1 }}
+                whileTap={{ scale: 0.98 }}
+                className="min-w-[106px] flex-1"
+              >
+                <Link
+                  to={stagePath(branch, caseId, runId, draftId, exportId, stage.id)}
+                  className={cn(
+                    'flex h-9 items-center gap-2 rounded-full border bg-white px-2.5 text-xs font-semibold transition-colors duration-300',
+                    isActive && 'executive-highlight',
+                    isCompleted && !isActive && 'border-[var(--ink-950)]',
+                    !isActive && !isCompleted && 'border-[var(--border-soft)] text-[var(--ink-700)]',
+                  )}
+                >
+                  <motion.div
+                    layout
                     className={cn(
-                      'flex h-7 min-w-7 items-center justify-center rounded-full border px-2 text-[11px] font-semibold',
+                      'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-all duration-300',
+                      isActive
+                        ? 'border-[var(--ink-950)] bg-white text-[var(--ink-950)]'
+                        : isCompleted
+                          ? 'border-[var(--ink-950)] bg-[var(--ink-950)] text-white'
+                          : 'border-[var(--border-soft)] text-[var(--ink-700)]',
+                    )}
+                  >
+                    <Icon size={12} />
+                  </motion.div>
+                  <span className="truncate text-[var(--ink-950)]">{stage.shortLabel}</span>
+                  <span
+                    className={cn(
+                      'ml-auto flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold',
                       isCompleted
-                        ? 'border-emerald-500/24 bg-emerald-500/10 text-emerald-100'
+                        ? 'bg-[var(--ink-950)] text-white'
                         : isActive
-                          ? 'border-[rgba(214,173,107,0.26)] bg-[rgba(214,173,107,0.12)] text-[var(--brand-700)]'
-                          : 'border-[var(--border-soft)] bg-[rgba(255,248,234,0.02)] text-[var(--ink-500)]',
+                          ? 'bg-[var(--surface-muted)] text-[var(--ink-950)]'
+                          : 'bg-[var(--surface-muted)] text-[var(--ink-600)]',
                     )}
                   >
                     {index + 1}
-                  </div>
-                </div>
-              </div>
-            </Link>
-          )
-        })}
+                  </span>
+                </Link>
+              </motion.div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

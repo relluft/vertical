@@ -1,10 +1,12 @@
+import { animate, motion, useMotionValue, useTransform } from 'framer-motion'
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowRight, CheckCircle2, Square } from 'lucide-react'
 import { Link, Navigate, useParams } from 'react-router-dom'
+import { PageTransition } from '../components/PageTransition'
 import { resolveRunStages } from '../data/demoData'
 import { Button, Eyebrow, Panel, ProgressBar, StatusPill, buttonStyles } from '../components/ui'
 import { useDemo } from '../context/DemoContext'
-import { draftPath } from '../lib/routes'
+import { caseStagePath, draftPath } from '../lib/routes'
 import { getWorkflowStages } from '../lib/workflow'
 import type { DemoDocumentType, DemoPageKey, DemoStage } from '../types/demo'
 
@@ -22,66 +24,66 @@ const stageDisplayByBranch: Record<
 > = {
   kp: [
     {
-      title: 'Запуск и очередь',
-      summary: 'Создаём запуск и передаём задачу оркестратору.',
-      details: 'Система фиксирует запуск, проверяет комплект входных данных и готовит пайплайн к выполнению.',
+      title: 'Распознаем позиции',
+      summary: 'Разбираем потребность или введенный текст.',
+      details:
+        'Система выделяет товарные позиции, количество, единицы измерения и важные характеристики.',
     },
     {
-      title: 'Нормализация контекста',
-      summary: 'Сводим потребность, фото и комментарии в общий контекст кейса.',
-      details: 'Это соответствует этапу объединения контекста в MVP: входные данные становятся единым набором для агентов.',
+      title: 'Ищем товары на Вертикаль',
+      summary: 'Подбираем подходящие товары и фиксируем сомнительные совпадения.',
+      details:
+        'Подбор идет внутри обработки и не требует отдельного пользовательского шага.',
     },
     {
-      title: 'Поиск нормативов',
-      summary: 'RAG подбирает применимые нормы и фрагменты с источниками.',
-      details: 'Нормативный слой ищет опору для дальнейших выводов и оставляет только пригодные для использования основания.',
+      title: 'Подтягиваем цены',
+      summary: 'Берем представительские цены через личный кабинет Вертикаль.',
+      details:
+        'Если цена недоступна, строка попадет в таблицу со статусом проверки.',
     },
     {
-      title: 'Цены и номенклатура',
-      summary: 'Собираем товарную часть для коммерческого предложения.',
-      details: 'Подтягиваются позиции и ценовая логика, чтобы КП собиралось уже с коммерческой основой.',
-    },
-    {
-      title: 'Генерация черновика',
-      summary: 'Собираем рабочий черновик КП по секциям.',
-      details: 'Документогенерация формирует обезличенный черновик, который затем открывается в редакторе.',
-    },
-    {
-      title: 'Проверка и контроль',
-      summary: 'Проверяем конфликты, пробелы и подозрительные места.',
-      details: 'Перед показом пользователю пайплайн отмечает зоны, где нужен ручной просмотр.',
+      title: 'Формируем рабочую таблицу',
+      summary: 'Создаем строки КП со статусами проверки, ценами и маржей.',
+      details:
+        'Следующий полноценный экран для менеджера - рабочая таблица КП.',
     },
   ],
   tz: [
     {
       title: 'Запуск и очередь',
       summary: 'Создаём запуск и передаём задачу оркестратору.',
-      details: 'Система фиксирует запуск, проверяет комплект входных данных и готовит пайплайн к выполнению.',
+      details:
+        'Система фиксирует запуск, проверяет комплект входных данных и готовит пайплайн к выполнению.',
     },
     {
       title: 'Анализ фото и замеров',
       summary: 'Собираем измеримые признаки объекта.',
-      details: 'Визуальная часть и технические вводные извлекают из материалов всё, что влияет на черновик ТЗ.',
+      details:
+        'Визуальная часть и технические вводные извлекают из материалов всё, что влияет на черновик ТЗ.',
     },
     {
       title: 'Нормализация контекста',
       summary: 'Собираем основу, адаптацию и параметры в единый контекст.',
-      details: 'Это соответствует этапу объединения контекста в MVP: входные данные становятся структурой для следующих шагов.',
+      details:
+        'Входные данные становятся структурированной базой для следующих шагов и итогового документа.',
     },
     {
       title: 'Поиск нормативов',
-      summary: 'RAG подбирает применимые нормы и фрагменты с источниками.',
-      details: 'Нормативный слой ищет опору для технических требований и будущих формулировок.',
+      summary: 'Система подбирает применимые нормы и опорные фрагменты.',
+      details:
+        'Нормативный слой ищет опору для технических требований и будущих формулировок.',
     },
     {
       title: 'Генерация черновика',
       summary: 'Собираем рабочий черновик ТЗ по секциям.',
-      details: 'Документогенерация формирует обезличенный черновик, который затем открывается в редакторе.',
+      details:
+        'Формируется рабочая версия технического задания для проверки и дальнейшей доработки.',
     },
     {
       title: 'Проверка и контроль',
       summary: 'Проверяем пробелы, конфликты и сомнительные места.',
-      details: 'Перед показом пользователю пайплайн отмечает зоны, где нужен ручной просмотр.',
+      details:
+        'Перед показом пользователю отмечаются зоны, где нужен ручной просмотр и подтверждение.',
     },
   ],
 }
@@ -95,6 +97,18 @@ function mapStagesForDisplay(branch: DemoDocumentType, stages: DemoStage[]) {
     summary: displayStages[index]?.summary ?? stage.summary,
     details: displayStages[index]?.details ?? stage.details,
   }))
+}
+
+function AnimatedNumber({ value }: { value: number }) {
+  const count = useMotionValue(0)
+  const rounded = useTransform(count, (latest) => Math.round(latest))
+
+  useEffect(() => {
+    const controls = animate(count, value, { duration: 0.8, ease: [0.16, 1, 0.3, 1] })
+    return controls.stop
+  }, [count, value])
+
+  return <motion.span>{rounded}</motion.span>
 }
 
 export function RunPage() {
@@ -191,7 +205,7 @@ export function RunPage() {
 
   function handleRunConfirmation() {
     if (!needStage?.isFilled) {
-      setLaunchWarning('Заполните раздел «Потребность», чтобы запустить сборку.')
+      setLaunchWarning('Добавьте потребность или текст, чтобы запустить формирование таблицы.')
       return
     }
 
@@ -211,17 +225,17 @@ export function RunPage() {
       : activeStage?.title ?? 'Готово к запуску'
 
   return (
-    <div className="space-y-5">
+    <PageTransition className="space-y-5">
       <Panel tone="highlight" className="rounded-[34px] p-5 md:p-6">
         <div className="space-y-5">
           <div className="max-w-3xl">
-            <Eyebrow>{activeBranch === 'kp' ? 'Сборка КП' : 'Сборка ТЗ'}</Eyebrow>
+            <Eyebrow>Фоновая обработка</Eyebrow>
             <h1 className="display-title mt-5 text-5xl text-[var(--ink-950)] md:text-6xl">
-              Оркестрация пайплайна
+              Формирование рабочей таблицы
             </h1>
             <p className="mt-4 text-sm leading-8 text-[var(--ink-800)] md:text-base">
-              Экран демонстрирует управляемое выполнение ИИ с премиальной подачей статусов и
-              спокойной кинематографичной анимацией.
+              Распознавание, подбор на Вертикаль и подтягивание цен идут как внутренняя обработка
+              между потребностью и рабочей таблицей.
             </p>
           </div>
 
@@ -229,7 +243,7 @@ export function RunPage() {
             <div className="relative">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="text-sm font-semibold text-[var(--ink-950)]">
-                  Проверка заполнения
+                  Входные данные
                 </div>
                 <StatusPill tone={completedInputCount > 0 ? 'ready' : 'low'}>
                   {completedInputCount} из {stageCompletion.length}
@@ -238,26 +252,33 @@ export function RunPage() {
 
               <div className="mt-3 flex flex-wrap gap-2">
                 {stageCompletion.map((stage) => (
-                  <div
+                  <Link
                     key={stage.id}
+                    to={caseStagePath(
+                      activeBranch,
+                      demoCase.id,
+                      stage.id as 'source' | 'need' | 'materials' | 'comments',
+                    )}
                     className={
                       stage.isFilled
-                        ? 'inline-flex items-center gap-2 rounded-full border border-emerald-500/24 bg-emerald-500/10 px-3 py-1.5 text-sm text-[var(--ink-950)]'
-                        : 'inline-flex items-center gap-2 rounded-full border border-[rgba(214,173,107,0.28)] bg-[rgba(214,173,107,0.12)] px-3 py-1.5 text-sm text-[var(--ink-950)]'
+                        ? 'inline-flex items-center gap-2 rounded-full border border-[var(--ink-950)] bg-[var(--ink-950)] px-3 py-1.5 text-sm text-white transition hover:-translate-y-0.5'
+                        : 'inline-flex items-center gap-2 rounded-full border border-[var(--border-strong)] bg-white px-3 py-1.5 text-sm text-[var(--ink-950)] transition hover:-translate-y-0.5'
                     }
                   >
                     {stage.isFilled ? (
-                      <CheckCircle2 size={14} className="text-emerald-300" />
+                      <CheckCircle2 size={14} className="text-white" />
                     ) : (
-                      <AlertTriangle size={14} className="text-amber-300" />
+                      <AlertTriangle size={14} className="text-[var(--ink-950)]" />
                     )}
-                    {stage.label}
-                  </div>
+                    <span className={stage.isFilled ? 'text-white' : 'text-[var(--ink-950)]'}>
+                      {stage.label}
+                    </span>
+                  </Link>
                 ))}
               </div>
 
               {launchWarning ? (
-                <div className="mt-3 rounded-[18px] border border-[rgba(214,173,107,0.28)] bg-[rgba(214,173,107,0.12)] px-4 py-3 text-sm text-[var(--brand-700)]">
+                <div className="mt-3 rounded-[18px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
                   {launchWarning}
                 </div>
               ) : null}
@@ -293,7 +314,7 @@ export function RunPage() {
                           {stage.title}
                         </div>
                         <div className="text-sm font-semibold text-[var(--brand-700)]">
-                          {stage.percent}%
+                          <AnimatedNumber value={stage.percent} />%
                         </div>
                       </div>
                       <div className="mt-2">
@@ -306,7 +327,7 @@ export function RunPage() {
 
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <div className="metal-pill rounded-full px-4 py-2 text-sm text-[var(--ink-700)]">
-                  Общий прогресс: {totalPercent}%
+                  Общий прогресс: <AnimatedNumber value={totalPercent} />%
                 </div>
 
                 {isRunning ? (
@@ -326,18 +347,14 @@ export function RunPage() {
                 ) : (
                   <Button onClick={handleRunConfirmation}>
                     <CheckCircle2 size={16} />
-                    {isAborted
-                      ? 'Запустить снова'
-                      : hasDemoVariant
-                        ? 'Запустить'
-                        : 'Подтвердить'}
+                    {isAborted ? 'Запустить снова' : hasDemoVariant ? 'Запустить' : 'Подтвердить'}
                   </Button>
                 )}
 
                 {resolved.isComplete ? (
                   <Link to={draftPath(activeBranch, demoCase.draftId)} className="contents">
                     <span className={`${buttonStyles('primary')} px-4 py-2.5 text-sm`}>
-                      Перейти в редактор
+                      Открыть рабочую таблицу
                       <ArrowRight size={15} />
                     </span>
                   </Link>
@@ -347,6 +364,6 @@ export function RunPage() {
           </div>
         </div>
       </Panel>
-    </div>
+    </PageTransition>
   )
 }

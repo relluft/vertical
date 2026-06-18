@@ -1,5 +1,6 @@
-import { Info, PencilLine } from 'lucide-react'
-import { useState } from 'react'
+import { ExternalLink, Trash2 } from 'lucide-react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import type {
   DemoOfferTable,
   DraftCellAnnotation,
@@ -7,102 +8,59 @@ import type {
   DraftField,
   OfferItemEditableField,
 } from '../types/demo'
+import {
+  addCalendarDays,
+  formatDateRu,
+  formatMoney,
+  formatQuantity,
+  getLineSaleTotal,
+  getOfferSaleTotal,
+  getVatFromGross,
+  kpDocumentNumber,
+  kpVatRate,
+  kpValidityDays,
+} from '../lib/kpFormatting'
+import { getEffectivePurchaseUnitPrice } from '../lib/kpPricing'
 import { cn } from '../lib/utils'
+import { resolveVerticalProductUrl } from '../lib/verticalProducts'
 
-const kpOfferColumns = [
-  '№ п/п',
-  'Наименование/описание товара',
-  'Кол-во, шт',
-  'Цена за единицу товара, руб.',
-  'Цена монтажа за единицу, руб.',
-  'Сумма товара, руб.',
-  'Сумма монтажа, руб.',
-  'Сумма с учетом монтажа, руб.',
-] as const
-
-function formatAmount(value: number) {
-  return new Intl.NumberFormat('ru-RU', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value)
-}
-
-function formatQuantity(value: number) {
-  return new Intl.NumberFormat('ru-RU', {
-    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
-    maximumFractionDigits: 2,
-  }).format(value)
-}
-
-function resolveRiskClasses(annotation?: DraftCellAnnotation) {
-  if (!annotation?.issue) {
-    return 'border-[var(--paper-line)] bg-[rgba(13,11,9,0.94)]'
-  }
-
-  if (annotation.issue.severity === 'high') {
-    return 'border-rose-500/32 bg-[rgba(73,25,31,0.4)]'
-  }
-
-  if (annotation.issue.severity === 'medium') {
-    return 'border-amber-500/30 bg-[rgba(82,52,23,0.38)]'
-  }
-
-  return 'border-amber-400/28 bg-[rgba(93,73,28,0.32)]'
-}
-
-function resolveInfoButtonClasses(annotation?: DraftCellAnnotation) {
-  if (!annotation?.issue) {
-    return 'text-[var(--ink-500)] hover:bg-white/6 hover:text-[var(--ink-800)]'
-  }
-
-  if (annotation.issue.severity === 'high') {
-    return 'text-rose-200 hover:bg-rose-500/15'
-  }
-
-  if (annotation.issue.severity === 'medium') {
-    return 'text-orange-200 hover:bg-orange-500/15'
-  }
-
-  return 'text-amber-200 hover:bg-amber-500/15'
-}
-
-function resolveIssueLabel(annotation?: DraftCellAnnotation) {
-  if (!annotation?.issue) {
-    return null
-  }
-
-  if (annotation.issue.severity === 'high') {
-    return 'Высокий риск'
-  }
-
-  if (annotation.issue.severity === 'medium') {
-    return 'Нужно подтвердить'
-  }
-
-  return 'Низкий риск'
-}
-
-function resolveFieldLabel(fieldId: DraftField['id']) {
-  return fieldId === 'dueDate' ? 'Срок выполнения' : 'Особые условия'
-}
+const numericFields: OfferItemEditableField[] = ['quantity', 'unitPrice', 'installationUnitPrice']
+const operatorWorkspaceWidth = 1340
+const percentFormatter = new Intl.NumberFormat('ru-RU', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+})
 
 function resolveEditableFieldCellId(itemId: string, field: OfferItemEditableField): DraftCellId {
   return `kp-item:${itemId}:${field}`
 }
 
-function resolveComputedCellId(
-  itemId: string,
-  field: 'productTotal' | 'installationTotal' | 'grandTotal',
-): DraftCellId {
-  return `kp-item:${itemId}:${field}`
+function getEditableDisplayValue(item: DemoOfferTable['items'][number], field: OfferItemEditableField) {
+  if (field === 'quantity') {
+    return item.quantity ? formatQuantity(item.quantity) : ''
+  }
+
+  if (field === 'installationUnitPrice') {
+    return item.installationUnitPrice ? formatMoney(item.installationUnitPrice) : ''
+  }
+
+  if (field === 'unitPrice') {
+    return item.unitPrice ? formatMoney(item.unitPrice) : ''
+  }
+
+  return String(item[field] ?? '')
 }
 
-function resolveTotalCellId(totalId: string): DraftCellId {
-  return `kp-total:${totalId}`
+function formatPercent(value: number) {
+  return `${percentFormatter.format(Number.isFinite(value) ? value : 0)}%`
 }
 
-function resolveDraftFieldCellId(fieldId: DraftField['id']): DraftCellId {
-  return `kp-field:${fieldId}`
+function getVerticalProductUrl(item: DemoOfferTable['items'][number], index: number) {
+  return resolveVerticalProductUrl(item, index)
+}
+
+function getOperatorPurchaseUnitPrice(item: DemoOfferTable['items'][number]) {
+  return getEffectivePurchaseUnitPrice(item)
 }
 
 interface KpOfferTableEditorProps {
@@ -110,31 +68,148 @@ interface KpOfferTableEditorProps {
   fields: DraftField[]
   cellAnnotations: Partial<Record<DraftCellId, DraftCellAnnotation>>
   editable?: boolean
+  documentDate?: string
+  documentNumber?: string
+  recipientName?: string
+  validityDays?: number
+  vatRate?: number
+  showOperatorColumns?: boolean
   onUpdateOfferItem?: (itemId: string, field: OfferItemEditableField, value: string) => void
+  onAddOfferItem?: () => void
+  onDeleteOfferItem?: (itemId: string) => void
   onUpdateField?: (fieldId: DraftField['id'], value: string) => void
 }
 
 export function KpOfferTableEditor({
   offerTable,
-  fields,
-  cellAnnotations,
   editable = false,
+  documentDate = new Date().toISOString().slice(0, 10),
+  documentNumber = kpDocumentNumber,
+  recipientName = '',
+  validityDays = kpValidityDays,
+  vatRate = kpVatRate,
+  showOperatorColumns = true,
   onUpdateOfferItem,
-  onUpdateField,
+  onDeleteOfferItem,
 }: KpOfferTableEditorProps) {
   const [editingCellId, setEditingCellId] = useState<DraftCellId | null>(null)
   const [editingValue, setEditingValue] = useState('')
-  const [openPopoverId, setOpenPopoverId] = useState<DraftCellId | null>(null)
+  const [selectedOperatorItemId, setSelectedOperatorItemId] = useState<string | null>(null)
+  const [workspaceScale, setWorkspaceScale] = useState(1)
+  const workspaceStageRef = useRef<HTMLDivElement | null>(null)
+  const tableHeaderRef = useRef<HTMLTableRowElement | null>(null)
+  const totalRowRef = useRef<HTMLTableRowElement | null>(null)
+  const itemRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({})
+  const [operatorRowHeights, setOperatorRowHeights] = useState<{
+    header: number
+    rows: Record<string, number>
+    total: number
+  }>({ header: 0, rows: {}, total: 0 })
+  const items = useMemo(() => offerTable?.items ?? [], [offerTable?.items])
+  const total = useMemo(() => getOfferSaleTotal(offerTable), [offerTable])
+  const validUntil = formatDateRu(addCalendarDays(documentDate, validityDays))
+  const operatorRows = useMemo(
+    () =>
+      items.map((item, index) => {
+        const purchaseUnitPrice = getOperatorPurchaseUnitPrice(item)
+        const saleUnitPrice = item.installationUnitPrice || 0
+        const marginUnit = saleUnitPrice - purchaseUnitPrice
+        const purchaseTotal = (item.quantity || 0) * purchaseUnitPrice
+        const saleTotal = getLineSaleTotal(item)
+        const margin = saleTotal - purchaseTotal
+        const marginPercent = purchaseTotal > 0 ? (margin / purchaseTotal) * 100 : 0
 
-  const items = offerTable?.items ?? []
-  const totals = offerTable?.totals ?? []
+        return {
+          item,
+          index,
+          purchaseUnitPrice,
+          purchaseTotal,
+          marginUnit,
+          margin,
+          marginPercent,
+          verticalUrl: getVerticalProductUrl(item, index),
+        }
+      }),
+    [items],
+  )
+  const operatorTotals = useMemo(() => {
+    const purchaseTotal = operatorRows.reduce((sum, row) => sum + row.purchaseTotal, 0)
+    const margin = operatorRows.reduce((sum, row) => sum + row.margin, 0)
+    const marginPercent = purchaseTotal > 0 ? (margin / purchaseTotal) * 100 : 0
+
+    return { purchaseTotal, margin, marginPercent }
+  }, [operatorRows])
+  const activeOperatorItemId = selectedOperatorItemId ?? operatorRows[0]?.item.id ?? null
+  const workspaceStageStyle = { '--operator-workspace-scale': workspaceScale } as CSSProperties
+
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined
+    }
+
+    const updateWorkspaceScale = () => {
+      const availableWidth = workspaceStageRef.current?.clientWidth ?? window.innerWidth
+      const nextScale = Math.min(1, availableWidth / operatorWorkspaceWidth)
+
+      setWorkspaceScale((current) => (Math.abs(current - nextScale) < 0.001 ? current : nextScale))
+    }
+
+    const frameId = window.requestAnimationFrame(updateWorkspaceScale)
+    const resizeObserver =
+      'ResizeObserver' in window && workspaceStageRef.current
+        ? new ResizeObserver(updateWorkspaceScale)
+        : null
+
+    if (workspaceStageRef.current) {
+      resizeObserver?.observe(workspaceStageRef.current)
+    }
+
+    window.addEventListener('resize', updateWorkspaceScale)
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', updateWorkspaceScale)
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined
+    }
+
+    const measureRows = () => {
+      const nextRows = Object.fromEntries(
+        items.map((item) => [item.id, itemRowRefs.current[item.id]?.offsetHeight ?? 0]),
+      )
+      const nextHeader = tableHeaderRef.current?.offsetHeight ?? 0
+      const nextTotal = totalRowRef.current?.offsetHeight ?? 0
+
+      setOperatorRowHeights((current) => {
+        const sameHeader = Math.abs(current.header - nextHeader) < 0.5
+        const sameTotal = Math.abs(current.total - nextTotal) < 0.5
+        const sameRows =
+          Object.keys(nextRows).length === Object.keys(current.rows).length &&
+          Object.entries(nextRows).every(([itemId, height]) => Math.abs((current.rows[itemId] ?? 0) - height) < 0.5)
+
+        return sameHeader && sameTotal && sameRows ? current : { header: nextHeader, rows: nextRows, total: nextTotal }
+      })
+    }
+
+    const frameId = window.requestAnimationFrame(measureRows)
+    window.addEventListener('resize', measureRows)
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+      window.removeEventListener('resize', measureRows)
+    }
+  }, [editingCellId, editingValue, items])
 
   const startEditing = (cellId: DraftCellId, value: string) => {
     if (!editable) {
       return
     }
 
-    setOpenPopoverId((current) => (current === cellId ? null : current))
     setEditingCellId(cellId)
     setEditingValue(value)
   }
@@ -149,100 +224,33 @@ export function KpOfferTableEditor({
     stopEditing()
   }
 
-  const renderPopover = (cellId: DraftCellId, annotation?: DraftCellAnnotation) => {
-    if (!annotation || openPopoverId !== cellId) {
-      return null
-    }
-
-    const issueLabel = resolveIssueLabel(annotation)
-
-    return (
-      <div className="absolute bottom-9 right-2 z-30 w-64 rounded-2xl border border-[var(--border-strong)] bg-[rgba(11,9,8,0.98)] p-3 shadow-2xl shadow-black/60">
-        {annotation.sources.map((source) => (
-          <div key={`${cellId}-${source.label}`} className="mb-2 last:mb-0">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--ink-500)]">
-              {source.label}
-            </div>
-            <div className="mt-1 text-xs leading-5 text-[var(--ink-900)]">{source.excerpt}</div>
-          </div>
-        ))}
-
-        {annotation.issue ? (
-          <div className="mt-3 rounded-xl border border-white/10 bg-white/4 px-3 py-2">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--ink-500)]">
-              {issueLabel}
-            </div>
-            <div className="mt-1 text-xs font-semibold text-[var(--ink-950)]">
-              {annotation.issue.title}
-            </div>
-            <div className="mt-1 text-xs leading-5 text-[var(--ink-800)]">
-              {annotation.issue.summary}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    )
-  }
-
-  const renderMetaButton = (cellId: DraftCellId, annotation?: DraftCellAnnotation) => {
-    if (!annotation) {
-      return null
-    }
-
-    return (
-      <>
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation()
-            setOpenPopoverId((current) => (current === cellId ? null : cellId))
-          }}
-          className={cn(
-            'absolute bottom-1.5 right-1.5 rounded-full p-1 opacity-75 transition',
-            resolveInfoButtonClasses(annotation),
-          )}
-          aria-label="Показать обоснование"
-        >
-          <Info size={12} />
-        </button>
-        {renderPopover(cellId, annotation)}
-      </>
-    )
-  }
-
   const renderEditableCell = ({
-    cellId,
-    value,
-    displayValue,
+    item,
+    field,
     multiline = false,
     align = 'left',
-    annotation,
-    onCommit,
-    placeholder,
-    colSpan,
+    placeholder = '',
   }: {
-    cellId: DraftCellId
-    value: string
-    displayValue: string
+    item: DemoOfferTable['items'][number]
+    field: OfferItemEditableField
     multiline?: boolean
-    align?: 'left' | 'right'
-    annotation?: DraftCellAnnotation
-    onCommit: (value: string) => void
+    align?: 'left' | 'center' | 'right'
     placeholder?: string
-    colSpan?: number
   }) => {
+    const cellId = resolveEditableFieldCellId(item.id, field)
     const isEditing = editingCellId === cellId
-    const isRightAligned = align === 'right'
+    const value = String(item[field] ?? '')
+    const displayValue = getEditableDisplayValue(item, field)
+    const numeric = numericFields.includes(field)
 
     return (
       <td
-        colSpan={colSpan}
         onClick={() => startEditing(cellId, value)}
         className={cn(
-          'group relative border px-3 py-3 align-top transition',
-          resolveRiskClasses(annotation),
-          editable ? 'cursor-text' : 'cursor-default',
-          isRightAligned ? 'text-right tabular-nums' : 'text-left',
+          'kp-doc-cell kp-doc-editable-cell',
+          editable ? 'kp-doc-cell-interactive' : '',
+          align === 'right' ? 'kp-doc-cell-right' : '',
+          align === 'center' ? 'kp-doc-cell-center' : '',
         )}
       >
         {isEditing ? (
@@ -252,26 +260,27 @@ export function KpOfferTableEditor({
               rows={3}
               value={editingValue}
               onChange={(event) => setEditingValue(event.target.value)}
-              onBlur={() => commitEditing(onCommit)}
+              onBlur={() => commitEditing((nextValue) => onUpdateOfferItem?.(item.id, field, nextValue))}
               onKeyDown={(event) => {
                 if (event.key === 'Escape') {
                   event.preventDefault()
                   stopEditing()
                 }
 
-                if (event.key === 'Enter') {
+                if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
                   event.preventDefault()
-                  commitEditing(onCommit)
+                  commitEditing((nextValue) => onUpdateOfferItem?.(item.id, field, nextValue))
                 }
               }}
-              className="min-h-[88px] w-full resize-none rounded-xl border border-[rgba(214,173,107,0.34)] bg-[rgba(11,9,8,0.98)] px-3 py-2 text-sm leading-6 text-[var(--ink-950)] outline-none"
+              className="kp-doc-cell-control kp-doc-cell-textarea"
             />
           ) : (
             <input
               autoFocus
+              inputMode={numeric ? 'decimal' : undefined}
               value={editingValue}
               onChange={(event) => setEditingValue(event.target.value)}
-              onBlur={() => commitEditing(onCommit)}
+              onBlur={() => commitEditing((nextValue) => onUpdateOfferItem?.(item.id, field, nextValue))}
               onKeyDown={(event) => {
                 if (event.key === 'Escape') {
                   event.preventDefault()
@@ -280,226 +289,300 @@ export function KpOfferTableEditor({
 
                 if (event.key === 'Enter') {
                   event.preventDefault()
-                  commitEditing(onCommit)
+                  commitEditing((nextValue) => onUpdateOfferItem?.(item.id, field, nextValue))
                 }
               }}
               className={cn(
-                'w-full rounded-xl border border-[rgba(214,173,107,0.34)] bg-[rgba(11,9,8,0.98)] px-3 py-2 text-sm text-[var(--ink-950)] outline-none',
-                isRightAligned ? 'text-right tabular-nums' : 'text-left',
+                'kp-doc-cell-control',
+                align === 'right' ? 'kp-doc-cell-control-right' : '',
+                align === 'center' ? 'kp-doc-cell-control-center' : '',
               )}
             />
           )
         ) : (
-          <div
-            className={cn(
-              'min-h-[24px] whitespace-pre-wrap pr-6 text-sm leading-6 text-[var(--ink-950)]',
-              !displayValue && 'text-[var(--ink-500)]',
-            )}
-          >
-            {displayValue || placeholder || (editable ? 'Нажмите, чтобы заполнить' : '—')}
-          </div>
+          <span className={displayValue ? '' : 'kp-doc-placeholder'}>{displayValue || placeholder}</span>
         )}
-
-        {renderMetaButton(cellId, annotation)}
       </td>
     )
   }
 
+  const renderOperatorPurchaseUnitCell = (row: (typeof operatorRows)[number]) => {
+    const cellId = resolveEditableFieldCellId(row.item.id, 'unitPrice')
+    const isEditing = editingCellId === cellId
+
+    return (
+      <div
+        className={cn(
+          'operator-extension-cell operator-extension-money',
+          editable ? 'operator-extension-cell-interactive' : '',
+        )}
+        role="cell"
+        onClick={() => {
+          if (!isEditing) {
+            startEditing(cellId, row.purchaseUnitPrice ? String(row.purchaseUnitPrice) : '')
+          }
+        }}
+      >
+        {isEditing ? (
+          <input
+            autoFocus
+            inputMode="decimal"
+            value={editingValue}
+            onChange={(event) => setEditingValue(event.target.value)}
+            onBlur={() => commitEditing((nextValue) => onUpdateOfferItem?.(row.item.id, 'unitPrice', nextValue))}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                stopEditing()
+              }
+
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                commitEditing((nextValue) => onUpdateOfferItem?.(row.item.id, 'unitPrice', nextValue))
+              }
+            }}
+            className="kp-doc-cell-control kp-doc-cell-control-right operator-extension-input"
+          />
+        ) : (
+          formatMoney(row.purchaseUnitPrice)
+        )}
+      </div>
+    )
+  }
+
   return (
-    <div className="document-paper rounded-[34px] border border-[var(--border-soft)] p-3 md:p-4">
-      <div className="overflow-x-auto rounded-[28px] border border-[var(--paper-line)] bg-[rgba(10,8,7,0.82)]">
-        <table className="min-w-[1180px] w-full border-collapse text-left text-sm text-[var(--ink-900)]">
-          <thead>
-            <tr className="bg-[linear-gradient(180deg,rgba(255,248,234,0.05),transparent_22%),rgba(13,11,9,0.98)] text-[var(--ink-500)]">
-              {kpOfferColumns.map((column) => (
-                <th
-                  key={column}
-                  className="border border-[var(--paper-line)] px-3 py-3 align-top text-[12px] font-semibold leading-5"
-                >
-                  {column}
-                </th>
-              ))}
-            </tr>
-          </thead>
+    <div className="word-stage" ref={workspaceStageRef} style={workspaceStageStyle}>
+      <div className="operator-workspace">
+        <article className="word-page" aria-label="Рабочий лист коммерческого предложения">
+          <img className="kp-doc-brand-header" src="/templates/kp-header.png" alt="" />
 
-          <tbody>
-            {items.length ? (
-              items.map((item, index) => {
-                const productTotal = item.quantity * item.unitPrice
-                const installationTotal = item.quantity * item.installationUnitPrice
-                const grandTotal = productTotal + installationTotal
-                const productTotalCellId = resolveComputedCellId(item.id, 'productTotal')
-                const installationTotalCellId = resolveComputedCellId(
-                  item.id,
-                  'installationTotal',
-                )
-                const grandTotalCellId = resolveComputedCellId(item.id, 'grandTotal')
+          <div className="kp-doc-top-meta">
+            <div>Контактная информация:</div>
+            <div>тел. +7(987)747 16 07</div>
+            <div>e-mail: obelyakov888@gmail.com</div>
+          </div>
 
-                return (
-                  <tr key={item.id} className="align-top">
-                    <td className="border border-[var(--paper-line)] bg-[rgba(13,11,9,0.94)] px-3 py-4 text-center font-semibold text-[var(--ink-950)]">
-                      {index + 1}
-                    </td>
+          <div className="kp-doc-recipient">кому:{recipientName ? ` ${recipientName}` : ''}</div>
 
-                    {renderEditableCell({
-                      cellId: resolveEditableFieldCellId(item.id, 'description'),
-                      value: item.description,
-                      displayValue: item.description,
-                      multiline: true,
-                      annotation:
-                        cellAnnotations[resolveEditableFieldCellId(item.id, 'description')],
-                      onCommit: (value) => onUpdateOfferItem?.(item.id, 'description', value),
-                    })}
+          <h1 className="kp-doc-title">
+            Коммерческое предложение № {documentNumber.trim() || kpDocumentNumber} от {formatDateRu(documentDate)} г
+          </h1>
 
-                    {renderEditableCell({
-                      cellId: resolveEditableFieldCellId(item.id, 'quantity'),
-                      value: String(item.quantity),
-                      displayValue: formatQuantity(item.quantity),
-                      align: 'right',
-                      annotation: cellAnnotations[resolveEditableFieldCellId(item.id, 'quantity')],
-                      onCommit: (value) => onUpdateOfferItem?.(item.id, 'quantity', value),
-                    })}
-
-                    {renderEditableCell({
-                      cellId: resolveEditableFieldCellId(item.id, 'unitPrice'),
-                      value: String(item.unitPrice),
-                      displayValue: formatAmount(item.unitPrice),
-                      align: 'right',
-                      annotation: cellAnnotations[resolveEditableFieldCellId(item.id, 'unitPrice')],
-                      onCommit: (value) => onUpdateOfferItem?.(item.id, 'unitPrice', value),
-                    })}
-
-                    {renderEditableCell({
-                      cellId: resolveEditableFieldCellId(item.id, 'installationUnitPrice'),
-                      value: String(item.installationUnitPrice),
-                      displayValue: formatAmount(item.installationUnitPrice),
-                      align: 'right',
-                      annotation:
-                        cellAnnotations[
-                          resolveEditableFieldCellId(item.id, 'installationUnitPrice')
-                        ],
-                      onCommit: (value) =>
-                        onUpdateOfferItem?.(item.id, 'installationUnitPrice', value),
-                    })}
-
-                    <td
+          <div className="kp-table-with-extension">
+            <table className="word-table kp-offer-table">
+              <colgroup>
+                <col className="kp-col-number" />
+                <col className="kp-col-name" />
+                <col className="kp-col-qty" />
+                <col className="kp-col-unit" />
+                <col className="kp-col-price" />
+                <col className="kp-col-sum" />
+              </colgroup>
+              <thead>
+                <tr ref={tableHeaderRef}>
+                  <th>№ п/п</th>
+                  <th>Наименование/описание товара</th>
+                  <th>Кол-во</th>
+                  <th>Ед. изм.</th>
+                  <th>Цена за единицу товара, руб.</th>
+                  <th>Сумма, руб.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.length ? (
+                  items.map((item, index) => (
+                    <tr
+                      key={item.id}
+                      ref={(node) => {
+                        itemRowRefs.current[item.id] = node
+                      }}
                       className={cn(
-                        'relative border px-3 py-4 text-right tabular-nums text-[var(--ink-950)]',
-                        resolveRiskClasses(cellAnnotations[productTotalCellId]),
+                        'kp-doc-data-row',
+                        activeOperatorItemId === item.id ? 'kp-doc-data-row-active' : '',
                       )}
+                      onMouseEnter={() => setSelectedOperatorItemId(item.id)}
                     >
-                      {formatAmount(productTotal)}
-                      {renderMetaButton(productTotalCellId, cellAnnotations[productTotalCellId])}
-                    </td>
-
-                    <td
-                      className={cn(
-                        'relative border px-3 py-4 text-right tabular-nums text-[var(--ink-950)]',
-                        resolveRiskClasses(cellAnnotations[installationTotalCellId]),
-                      )}
-                    >
-                      {formatAmount(installationTotal)}
-                      {renderMetaButton(
-                        installationTotalCellId,
-                        cellAnnotations[installationTotalCellId],
-                      )}
-                    </td>
-
-                    <td
-                      className={cn(
-                        'relative border px-3 py-4 text-right font-semibold tabular-nums text-[var(--ink-950)]',
-                        resolveRiskClasses(cellAnnotations[grandTotalCellId]),
-                      )}
-                    >
-                      {formatAmount(grandTotal)}
-                      {renderMetaButton(grandTotalCellId, cellAnnotations[grandTotalCellId])}
-                    </td>
+                      <td className="kp-doc-cell kp-doc-cell-center kp-row-number-cell">
+                        <span>{index + 1}</span>
+                        {editable ? (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onDeleteOfferItem?.(item.id)
+                            }}
+                            className="kp-row-delete"
+                            aria-label="Удалить строку"
+                            title="Удалить строку"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        ) : null}
+                      </td>
+                      {renderEditableCell({
+                        item,
+                        field: 'description',
+                        multiline: true,
+                        placeholder: 'Наименование товара',
+                      })}
+                      {renderEditableCell({
+                        item,
+                        field: 'quantity',
+                        align: 'center',
+                        placeholder: '0',
+                      })}
+                      {renderEditableCell({
+                        item,
+                        field: 'unit',
+                        align: 'center',
+                        placeholder: 'шт',
+                      })}
+                      {renderEditableCell({
+                        item,
+                        field: 'installationUnitPrice',
+                        align: 'right',
+                        placeholder: '0,00',
+                      })}
+                      <td className="kp-doc-cell kp-doc-cell-right">{formatMoney(getLineSaleTotal(item))}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td className="kp-doc-cell kp-doc-cell-center" />
+                    <td className="kp-doc-cell kp-doc-placeholder">Добавьте первую позицию КП</td>
+                    <td className="kp-doc-cell kp-doc-cell-center" />
+                    <td className="kp-doc-cell kp-doc-cell-center" />
+                    <td className="kp-doc-cell kp-doc-cell-right" />
+                    <td className="kp-doc-cell kp-doc-cell-right" />
                   </tr>
-                )
-              })
-            ) : (
-              <tr>
-                <td
-                  colSpan={8}
-                  className="border border-[var(--paper-line)] bg-[rgba(13,11,9,0.94)] px-5 py-6 text-sm leading-7 text-[var(--ink-500)]"
-                >
-                  Таблица готова к редактированию. Демо-заполнение можно включить кнопкой справа
-                  сверху.
-                </td>
-              </tr>
-            )}
+                )}
 
-            {totals.map((total) => {
-              const totalCellId = resolveTotalCellId(total.id)
-              const annotation = cellAnnotations[totalCellId]
-
-              return (
-                <tr
-                  key={total.id}
-                  className={
-                    total.tone === 'final'
-                      ? 'bg-[rgba(41,29,18,0.98)]'
-                      : total.tone === 'subtotal'
-                        ? 'bg-[rgba(22,17,13,0.96)]'
-                        : 'bg-[rgba(17,14,11,0.9)]'
-                  }
-                >
-                  <td
-                    colSpan={5}
-                    className="border border-[var(--paper-line)] px-3 py-3 text-right text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--ink-800)]"
-                  >
-                    {total.label}
+                <tr ref={totalRowRef}>
+                  <td className="kp-doc-cell kp-doc-total-label" colSpan={5}>
+                    ИТОГО:
                   </td>
-                  <td className="border border-[var(--paper-line)] px-3 py-3 text-right font-semibold tabular-nums text-[var(--ink-950)]">
-                    {total.productTotal === undefined ? '' : formatAmount(total.productTotal)}
-                  </td>
-                  <td className="border border-[var(--paper-line)] px-3 py-3 text-right font-semibold tabular-nums text-[var(--ink-950)]">
-                    {total.installationTotal === undefined
-                      ? ''
-                      : formatAmount(total.installationTotal)}
-                  </td>
-                  <td
-                    className={cn(
-                      'relative border px-3 py-3 text-right font-semibold tabular-nums text-[var(--ink-950)]',
-                      resolveRiskClasses(annotation),
-                    )}
-                  >
-                    {formatAmount(total.grandTotal)}
-                    {renderMetaButton(totalCellId, annotation)}
-                  </td>
+                  <td className="kp-doc-cell kp-doc-total-value">{formatMoney(total)}</td>
                 </tr>
-              )
-            })}
+                <tr>
+                  <td className="kp-doc-cell kp-doc-total-label" colSpan={5}>
+                    В том числе НДС {vatRate}%
+                  </td>
+                  <td className="kp-doc-cell kp-doc-total-value">{formatMoney(getVatFromGross(total, vatRate))}</td>
+                </tr>
+              </tbody>
+            </table>
 
-            {fields.map((field) => {
-              const fieldCellId = resolveDraftFieldCellId(field.id)
+            {showOperatorColumns ? (
+            <div className="operator-extension-table" role="table" aria-label="Служебные колонки">
+              <div
+                className="operator-extension-head"
+                role="row"
+                style={operatorRowHeights.header ? { height: operatorRowHeights.header } : undefined}
+              >
+                <div className="operator-extension-head-cell" role="columnheader">
+                  Цена закупки единицы товара, руб.
+                </div>
+                <div className="operator-extension-head-cell" role="columnheader">
+                  Сумма закупки, руб.
+                </div>
+                <div className="operator-extension-head-cell" role="columnheader">
+                  Наценка за единицу товара, руб.
+                </div>
+                <div className="operator-extension-head-cell" role="columnheader">
+                  Сумма наценки, руб.
+                </div>
+                <div className="operator-extension-head-cell" role="columnheader">
+                  %
+                </div>
+                <div className="operator-extension-head-cell" role="columnheader">
+                  Ссылка
+                </div>
+              </div>
+              <div className="operator-extension-body" role="rowgroup">
+                {operatorRows.map((row) => {
+                  const isSelected = activeOperatorItemId === row.item.id
 
-              return (
-                <tr key={field.id}>
-                  <td
-                    colSpan={2}
-                    className="border border-[var(--paper-line)] bg-[rgba(15,12,10,0.96)] px-3 py-3 text-sm font-semibold text-[var(--ink-900)]"
-                  >
-                    <div className="flex items-center gap-2">
-                      <PencilLine size={15} className="text-[var(--brand-700)]" />
-                      {resolveFieldLabel(field.id)}
+                  return (
+                    <div
+                      key={row.item.id}
+                      className={cn('operator-extension-row', isSelected ? 'is-active' : '')}
+                      role="row"
+                      style={
+                        operatorRowHeights.rows[row.item.id]
+                          ? { height: operatorRowHeights.rows[row.item.id] }
+                          : undefined
+                      }
+                      onMouseEnter={() => setSelectedOperatorItemId(row.item.id)}
+                    >
+                      {renderOperatorPurchaseUnitCell(row)}
+                      <div className="operator-extension-cell operator-extension-money" role="cell">
+                        {formatMoney(row.purchaseTotal)}
+                      </div>
+                      <div className="operator-extension-cell operator-extension-money" role="cell">
+                        {formatMoney(row.marginUnit)}
+                      </div>
+                      <div className="operator-extension-cell operator-extension-money" role="cell">
+                        {formatMoney(row.margin)}
+                      </div>
+                      <div className="operator-extension-cell operator-extension-percent" role="cell">
+                        {formatPercent(row.marginPercent)}
+                      </div>
+                      <div className="operator-extension-cell operator-extension-link-cell" role="cell">
+                        <a
+                          className="operator-extension-link"
+                          href={row.verticalUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label="Открыть товар на сайте Вертикаль"
+                          title="Открыть товар на сайте Вертикаль"
+                        >
+                          <span>Открыть</span>
+                          <ExternalLink size={11} />
+                        </a>
+                      </div>
                     </div>
-                  </td>
-                  {renderEditableCell({
-                    cellId: fieldCellId,
-                    value: field.value,
-                    displayValue: field.value,
-                    multiline: field.id === 'specialTerms',
-                    annotation: cellAnnotations[fieldCellId],
-                    onCommit: (value) => onUpdateField?.(field.id, value),
-                    placeholder: field.hint,
-                    colSpan: 6,
-                  })}
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+                  )
+                })}
+                <div
+                  className="operator-extension-row operator-extension-total-row"
+                  role="row"
+                  style={operatorRowHeights.total ? { height: operatorRowHeights.total } : undefined}
+                >
+                  <div className="operator-extension-cell" role="cell" />
+                  <div className="operator-extension-cell operator-extension-money" role="cell">
+                    {formatMoney(operatorTotals.purchaseTotal)}
+                  </div>
+                  <div className="operator-extension-cell" role="cell" />
+                  <div className="operator-extension-cell operator-extension-money" role="cell">
+                    {formatMoney(operatorTotals.margin)}
+                  </div>
+                  <div className="operator-extension-cell operator-extension-percent" role="cell">
+                    {formatPercent(operatorTotals.marginPercent)}
+                  </div>
+                  <div className="operator-extension-cell" role="cell" />
+                </div>
+              </div>
+            </div>
+            ) : null}
+          </div>
+
+          <div className="kp-doc-conditions">
+            <p>СТОИМОСТЬ ВКЛЮЧАЕТ ДОСТАВКУ.</p>
+            <p>СРОК ДЕЙСТВИЯ КОММЕРЧЕСКОГО ПРЕДЛОЖЕНИЯ ДО {validUntil} г.</p>
+          </div>
+
+          <div className="kp-doc-signature">
+            <p>С уважением,</p>
+            <div className="kp-doc-signature-stack">
+              <img className="kp-doc-signature-stack-signature" src="/templates/kp-signature.png" alt="" />
+              <img className="kp-doc-signature-stack-stamp" src="/templates/kp-stamp.png" alt="" />
+              <span className="kp-doc-signature-stack-role">Индивидуальный предприниматель</span>
+              <span className="kp-doc-signature-stack-line" />
+              <span className="kp-doc-signature-stack-name">/О.В. Беляков/</span>
+            </div>
+          </div>
+        </article>
+
       </div>
     </div>
   )
