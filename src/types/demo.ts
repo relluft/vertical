@@ -115,6 +115,7 @@ export interface DemoOfferTableItem {
   sourceNeed: string
   productCode: string
   productUrl?: string
+  productImageUrl?: string
   unit: string
   quantity: number
   unitPrice: number

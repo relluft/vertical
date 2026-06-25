@@ -1668,7 +1668,7 @@ export function createExportArtifact(format: ExportArtifact['format']) {
   return {
     id: `export-${format.toLowerCase()}-${stamp}`,
     format,
-    fileName: `Вертикаль-КП-${format.toLowerCase()}-${stamp}.${extension}`,
+    fileName: `Учетная-система-КП-${format.toLowerCase()}-${stamp}.${extension}`,
     createdAt: timestamp,
     status: 'generated',
   } satisfies ExportArtifact

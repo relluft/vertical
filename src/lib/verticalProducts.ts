@@ -1,8 +1,14 @@
 import { getSaleUnitPriceFromPurchase, roundMoneyAmount } from './kpPricing'
+import {
+  getVerticalMockImageForProductUrl,
+  getVerticalMockImageForText,
+  verticalMockCatalogByCode,
+} from './verticalMockCatalog'
 
 export interface VerticalProductLike {
   productCode?: string
   productUrl?: string
+  productImageUrl?: string
   description?: string
   sourceNeed?: string
   unit?: string
@@ -20,6 +26,7 @@ interface VerticalProductCatalogItem {
   price: number
   unit: string
   quantity: number
+  imageUrl?: string
 }
 
 export const verticalProductCatalogByCode: Record<string, VerticalProductCatalogItem> = {
@@ -275,6 +282,7 @@ export const verticalProductCatalogByCode: Record<string, VerticalProductCatalog
     unit: 'шт',
     quantity: 1,
   },
+  ...verticalMockCatalogByCode,
 }
 
 export const verticalProductUrlsByCode = Object.fromEntries(
@@ -347,11 +355,32 @@ export function resolveVerticalProductUrl(item: VerticalProductLike, index = 0) 
   return `https://tiflocentre.ru/magazin/search.php?q=${encodeURIComponent(query)}`
 }
 
+export function resolveVerticalProductImageUrl(item: VerticalProductLike) {
+  if (item.productImageUrl) {
+    return item.productImageUrl
+  }
+
+  const mappedImage = item.productCode ? verticalProductCatalogByCode[item.productCode]?.imageUrl : undefined
+
+  if (mappedImage) {
+    return mappedImage
+  }
+
+  const imageFromProductUrl = getVerticalMockImageForProductUrl(item.productUrl)
+
+  if (imageFromProductUrl) {
+    return imageFromProductUrl
+  }
+
+  return getVerticalMockImageForText([item.description, item.sourceNeed, item.productCode].filter(Boolean).join(' '))
+}
+
 export function attachVerticalProductData<T extends VerticalProductLike>(item: T): T {
   const catalogItem = item.productCode ? verticalProductCatalogByCode[item.productCode] : undefined
 
   if (!catalogItem) {
-    return item
+    const productImageUrl = resolveVerticalProductImageUrl(item)
+    return productImageUrl ? { ...item, productImageUrl } : item
   }
 
   const currentSaleUnitPrice = Number.isFinite(item.installationUnitPrice)
@@ -380,6 +409,7 @@ export function attachVerticalProductData<T extends VerticalProductLike>(item: T
   return {
     ...item,
     productUrl: catalogItem.url,
+    productImageUrl: item.productImageUrl || catalogItem.imageUrl || resolveVerticalProductImageUrl(item),
     sourceNeed: getSourceNeed(item.productCode, catalogItem),
     description: catalogItem.name,
     unit: item.unit || catalogItem.unit,

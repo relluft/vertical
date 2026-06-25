@@ -1,29 +1,31 @@
 import {
+  type CSSProperties,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
 } from 'react'
 import {
-  ArrowRight,
+  Building2,
   CalendarDays,
   Eye,
-  FileText,
+  ExternalLink,
   Hash,
   History,
-  Loader2,
-  Paperclip,
+  Maximize2,
+  Plus,
   RotateCcw,
   Save,
+  Search,
   Settings2,
-  Sparkles,
+  SlidersHorizontal,
   X,
 } from 'lucide-react'
 import { KpOfferTableEditor } from '../components/KpOfferTableEditor'
 import { useDemo } from '../context/DemoContext'
-import { getKpDemoScenarios, type KpDemoScenario } from '../data/demoData'
+import { createEmptyOfferTable, recalculateOfferTable } from '../data/demoData'
+import { loadCrmState, saveCrmState, upsertQuoteFromOfferTable } from '../crm/demoStore'
 import { downloadKpDoc, openSavedKpDoc, type KpDocumentProgress, type SavedKpDocument } from '../lib/kpDocument'
 import {
   addCalendarDays,
@@ -33,9 +35,14 @@ import {
   kpVatRate,
   kpValidityDays,
 } from '../lib/kpFormatting'
+import { kpPriceRevision } from '../lib/kpPricing'
+import { resolveVerticalProductUrl } from '../lib/verticalProducts'
+import type { CrmState, ProductVariant, Supplier, SupplierProduct } from '../crm/types'
+import type { DemoOfferTable, DemoOfferTableItem } from '../types/demo'
 
 type KpView = 'home' | 'work' | 'history' | 'settings'
 type HistoryMode = 'push' | 'replace'
+type ConstructorWorkspaceMode = 'inline' | 'modal'
 
 interface KpHistoryEntry {
   id: string
@@ -52,9 +59,20 @@ interface DownloadToast {
   fileName: string
 }
 
-const historyStorageKey = 'nuoperator-kp-history-v1'
-const settingsStorageKey = 'nuoperator-kp-settings-v1'
-const kpDemoScenarios = getKpDemoScenarios()
+interface KpEditorPageProps {
+  projectId?: string | null
+  darkTheme?: boolean
+  embedded?: boolean
+}
+
+interface CatalogOption {
+  variant: ProductVariant
+  product: SupplierProduct
+  supplier: Supplier
+}
+
+const historyStorageKey = 'uchet-system-kp-history-v1'
+const settingsStorageKey = 'uchet-system-kp-settings-v1'
 
 interface KpEditorSettings {
   numberSeries: string
@@ -87,8 +105,8 @@ const defaultKpSettings: KpEditorSettings = {
   showOperatorColumns: true,
 }
 
-function resolveKpView(value: string | null): KpView {
-  return value === 'work' || value === 'history' || value === 'settings' ? value : 'home'
+function resolveKpView(value: string | null, fallback: KpView = 'home'): KpView {
+  return value === 'home' || value === 'work' || value === 'history' || value === 'settings' ? value : fallback
 }
 
 function getInitialView(): KpView {
@@ -96,18 +114,13 @@ function getInitialView(): KpView {
     return 'home'
   }
 
-  return resolveKpView(new URLSearchParams(window.location.search).get('view'))
+  const params = new URLSearchParams(window.location.search)
+  const fallback = params.get('screen') === 'kp' ? 'work' : 'home'
+
+  return resolveKpView(params.get('view'), fallback)
 }
 
-function getInitialRequestModal() {
-  if (typeof window === 'undefined') {
-    return false
-  }
-
-  return new URLSearchParams(window.location.search).get('request') === 'new'
-}
-
-function getKpViewUrl(view: KpView, requestModal: boolean) {
+function getKpViewUrl(view: KpView) {
   const url = new URL(window.location.href)
 
   if (view === 'home') {
@@ -116,11 +129,7 @@ function getKpViewUrl(view: KpView, requestModal: boolean) {
     url.searchParams.set('view', view)
   }
 
-  if (requestModal) {
-    url.searchParams.set('request', 'new')
-  } else {
-    url.searchParams.delete('request')
-  }
+  url.searchParams.delete('request')
 
   return `${url.pathname}${url.search}${url.hash}`
 }
@@ -166,6 +175,99 @@ function shouldSyncDocumentTitle(documentTitle: string, documentNumber: string) 
   const trimmedNumber = documentNumber.trim()
 
   return !trimmedTitle || trimmedTitle === trimmedNumber
+}
+
+function parseMoneyInput(value: string, fallback: number) {
+  const parsed = Number(value.replace(/\s+/g, '').replace(',', '.'))
+
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
+}
+
+function roundMoneyValue(value: number) {
+  return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100
+}
+
+function isParserVariantLabel(value?: string) {
+  return value?.toLocaleLowerCase('ru-RU').includes('вариант из парсера') ?? false
+}
+
+function getVariantSizeLabel(variant: ProductVariant) {
+  return variant.size && !isParserVariantLabel(variant.size) ? variant.size : ''
+}
+
+function getCatalogVariantMeta(option: CatalogOption) {
+  const sizeLabel = getVariantSizeLabel(option.variant)
+  const variantName = option.variant.variantName !== option.product.name ? option.variant.variantName : ''
+
+  return sizeLabel || variantName
+}
+
+function getVariantDetailLabel(variant: ProductVariant) {
+  return [getVariantSizeLabel(variant), variant.material].filter(Boolean).join(' · ')
+}
+
+function getCatalogCategoryLabel(option: CatalogOption) {
+  return option.product.category.trim() || 'Без типа'
+}
+
+function makeCatalogOfferItem(
+  option: CatalogOption,
+  quantity: number,
+  salePrice: number,
+  comment: string,
+): DemoOfferTableItem {
+  const safeQuantity = Math.max(1, Math.round(quantity || 1))
+  const purchasePrice = roundMoneyValue(Math.max(0, option.variant.purchasePrice || option.product.basePurchasePrice || 0))
+  const resolvedSalePrice = roundMoneyValue(Math.max(0, salePrice || 0))
+  const descriptionParts = [
+    option.product.name,
+    option.variant.variantName,
+    option.variant.size,
+    option.variant.color,
+    option.variant.material,
+  ].filter(Boolean)
+  const productUrl = resolveVerticalProductUrl({
+    description: option.product.name,
+    productCode: option.variant.sku || option.product.sku,
+  })
+
+  return {
+    id: `offer-catalog-${option.variant.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    sourceNeed: `${option.product.category}; ${option.variant.availability || option.product.availability}`,
+    description: descriptionParts.join(', '),
+    productCode: option.variant.sku || option.product.sku,
+    productUrl,
+    productImageUrl: option.product.imageUrl,
+    unit: option.product.unit || 'шт',
+    quantity: safeQuantity,
+    unitPrice: purchasePrice,
+    installationUnitPrice: resolvedSalePrice,
+    minSalePrice: roundMoneyValue(resolvedSalePrice * 0.92),
+    maxSalePrice: roundMoneyValue(resolvedSalePrice * 1.16),
+    marketBenchmark: resolvedSalePrice,
+    pricingRevision: kpPriceRevision,
+    reviewStatus: option.supplier.updateStatus === 'fresh' ? 'готово' : 'проверить цену',
+    managerComment:
+      comment.trim() ||
+      `${option.supplier.name}: ${option.variant.availability || option.product.availability}. Цена зафиксирована вручную в конструкторе.`,
+  }
+}
+
+function appendOfferItem(offerTable: DemoOfferTable | null, item: DemoOfferTableItem) {
+  const current = offerTable ?? createEmptyOfferTable()
+
+  return recalculateOfferTable({
+    ...current,
+    items: [...current.items, item],
+    totals: current.totals.map((total) => ({ ...total })),
+  })
+}
+
+function makeCatalogProductUrl(option: CatalogOption) {
+  return resolveVerticalProductUrl({
+    description: option.product.name,
+    productCode: option.variant.sku || option.product.sku,
+  })
 }
 
 function sanitizeKpSettings(value: unknown): KpEditorSettings {
@@ -236,29 +338,53 @@ function isHistoryEntry(value: unknown): value is KpHistoryEntry {
   )
 }
 
-export function KpEditorPage() {
+export function KpEditorPage({ projectId = null, darkTheme = false, embedded = false }: KpEditorPageProps) {
   const {
     state: { draft, exportForm },
+    startPipeline,
     updateExportField,
     applyKpOfferTable,
     updateOfferItem,
+    addOfferItem,
     deleteOfferItem,
   } = useDemo()
-  const [activeView, setActiveView] = useState<KpView>(getInitialView)
+  const [activeView, setActiveView] = useState<KpView>(() => (projectId ? 'work' : getInitialView()))
   const [isGeneratingWord, setIsGeneratingWord] = useState(false)
   const [isOpeningWord, setIsOpeningWord] = useState(false)
   const [wordProgress, setWordProgress] = useState<KpDocumentProgress | null>(null)
   const [lastSavedDoc, setLastSavedDoc] = useState<SavedKpDocument | null>(null)
   const [generationMessage, setGenerationMessage] = useState<string | null>(null)
   const [downloadToast, setDownloadToast] = useState<DownloadToast | null>(null)
-  const [isRequestModalOpen, setIsRequestModalOpen] = useState(getInitialRequestModal)
-  const [requestText, setRequestText] = useState('')
-  const [attachedFileName, setAttachedFileName] = useState<string | null>(null)
-  const [isFlowGenerating, setIsFlowGenerating] = useState(false)
-  const [flowProgress, setFlowProgress] = useState(0)
   const [settings, setSettings] = useState<KpEditorSettings>(loadKpSettings)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [crmState, setCrmState] = useState<CrmState>(loadCrmState)
+  const [catalogSearch, setCatalogSearch] = useState('')
+  const [selectedCatalogCategory, setSelectedCatalogCategory] = useState('all')
+  const [isCatalogFiltersOpen, setIsCatalogFiltersOpen] = useState(false)
+  const [selectedVariantId, setSelectedVariantId] = useState('')
+  const [constructorQty, setConstructorQty] = useState(1)
+  const [constructorSalePrice, setConstructorSalePrice] = useState('')
+  const [isConstructorModalOpen, setIsConstructorModalOpen] = useState(false)
+  const [documentPreviewWidth, setDocumentPreviewWidth] = useState<number | null>(null)
+  const constructorSalePriceRef = useRef('')
+  const initializedProjectRef = useRef<string | null>(null)
   const total = useMemo(() => getOfferSaleTotal(draft.offerTable), [draft.offerTable])
+  const documentWorkTileStyle = useMemo(
+    () =>
+      ({
+        '--kp-document-preview-width': documentPreviewWidth ? `${Math.round(documentPreviewWidth)}px` : undefined,
+      }) as CSSProperties,
+    [documentPreviewWidth],
+  )
+  const handlePagePreviewWidthChange = useCallback((width: number) => {
+    setDocumentPreviewWidth((current) => (current !== null && Math.abs(current - width) < 0.5 ? current : width))
+  }, [])
+  const updateConstructorSalePrice = useCallback((value: string) => {
+    constructorSalePriceRef.current = value
+    setConstructorSalePrice(value)
+  }, [])
+  const resetConstructorSalePrice = useCallback(() => {
+    updateConstructorSalePrice('')
+  }, [updateConstructorSalePrice])
   const [historyEntries, setHistoryEntries] = useState<KpHistoryEntry[]>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -293,14 +419,88 @@ export function KpEditorPage() {
   const settingsPreviewRecipient = normalizeText(settings.defaultRecipient, exportForm.counterpartyName || 'не задан')
   const settingsPreviewValidUntil = formatDateLabel(addCalendarDays(settingsPreviewDate, settings.validityDays))
   const settingsPreviewVat = getVatFromGross(total, settings.vatRate)
+  const projectDeal = useMemo(
+    () => (projectId ? crmState.deals.find((deal) => deal.id === projectId) : undefined),
+    [crmState.deals, projectId],
+  )
+  const projectCounterparty = useMemo(
+    () => (projectDeal ? crmState.counterparties.find((item) => item.id === projectDeal.counterpartyId) : undefined),
+    [crmState.counterparties, projectDeal],
+  )
+  const projectObject = useMemo(
+    () => (projectDeal ? crmState.objects.find((item) => item.id === projectDeal.objectId) : undefined),
+    [crmState.objects, projectDeal],
+  )
+  const projectDocuments = useMemo(
+    () => (projectDeal ? crmState.documents.filter((document) => document.dealId === projectDeal.id) : []),
+    [crmState.documents, projectDeal],
+  )
+  const catalogOptions = useMemo<CatalogOption[]>(() => {
+    const productsById = new Map(crmState.products.map((product) => [product.id, product]))
+    const suppliersById = new Map(crmState.suppliers.map((supplier) => [supplier.id, supplier]))
 
-  const writeNavigationState = useCallback((view: KpView, requestModal: boolean, mode: HistoryMode) => {
+    return crmState.variants
+      .map((variant) => {
+        const product = productsById.get(variant.supplierProductId)
+        const supplier = product ? suppliersById.get(product.supplierId) : undefined
+
+        return product && supplier ? { variant, product, supplier } : null
+      })
+      .filter((item): item is CatalogOption => Boolean(item))
+  }, [crmState.products, crmState.suppliers, crmState.variants])
+  const catalogCategoryOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+
+    catalogOptions.forEach((option) => {
+      const category = getCatalogCategoryLabel(option)
+      counts.set(category, (counts.get(category) ?? 0) + 1)
+    })
+
+    const typedCategories = [...counts.entries()]
+      .map(([id, count]) => ({ id, label: id, count }))
+      .sort((first, second) => first.label.localeCompare(second.label, 'ru-RU'))
+
+    return [{ id: 'all', label: 'Все типы', count: catalogOptions.length }, ...typedCategories]
+  }, [catalogOptions])
+  const filteredCatalogOptions = useMemo(() => {
+    const normalizedSearch = catalogSearch.toLocaleLowerCase('ru-RU').trim()
+
+    return catalogOptions
+      .filter((option) => {
+        if (selectedCatalogCategory !== 'all' && getCatalogCategoryLabel(option) !== selectedCatalogCategory) {
+          return false
+        }
+
+        if (!normalizedSearch) {
+          return true
+        }
+
+        return [
+          option.product.name,
+          option.product.category,
+          option.product.sku,
+          option.variant.sku,
+          option.variant.variantName,
+          option.variant.size,
+          option.variant.color,
+          option.supplier.name,
+        ]
+          .join(' ')
+          .toLocaleLowerCase('ru-RU')
+          .includes(normalizedSearch)
+      })
+  }, [catalogOptions, catalogSearch, selectedCatalogCategory])
+  const selectedCatalogOption =
+    filteredCatalogOptions.find((option) => option.variant.id === selectedVariantId) ?? filteredCatalogOptions[0] ?? null
+  const selectedCatalogProductUrl = selectedCatalogOption ? makeCatalogProductUrl(selectedCatalogOption) : null
+
+  const writeNavigationState = useCallback((view: KpView, mode: HistoryMode) => {
     if (typeof window === 'undefined') {
       return
     }
 
-    const nextUrl = getKpViewUrl(view, requestModal)
-    const state = { view, requestModal }
+    const nextUrl = getKpViewUrl(view)
+    const state = { view }
 
     if (mode === 'replace') {
       window.history.replaceState(state, '', nextUrl)
@@ -312,22 +512,10 @@ export function KpEditorPage() {
   const navigateToView = useCallback(
     (view: KpView, mode: HistoryMode = 'push') => {
       setActiveView(view)
-      setIsRequestModalOpen(false)
-      writeNavigationState(view, false, mode)
+      writeNavigationState(view, mode)
     },
     [writeNavigationState],
   )
-
-  const openRequestModal = useCallback(() => {
-    setIsRequestModalOpen(true)
-    setGenerationMessage(null)
-    writeNavigationState(activeView, true, 'push')
-  }, [activeView, writeNavigationState])
-
-  const closeRequestModal = useCallback(() => {
-    setIsRequestModalOpen(false)
-    writeNavigationState(activeView, false, 'replace')
-  }, [activeView, writeNavigationState])
 
   const updateSetting = useCallback(<K extends keyof KpEditorSettings,>(field: K, value: KpEditorSettings[K]) => {
     setSettings((current) => ({
@@ -454,58 +642,82 @@ export function KpEditorPage() {
   }, [downloadToast])
 
   useEffect(() => {
+    if (!isConstructorModalOpen || typeof window === 'undefined') {
+      return undefined
+    }
+
+    const previousOverflow = document.body.style.overflow
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsConstructorModalOpen(false)
+      }
+    }
+
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isConstructorModalOpen])
+
+  useEffect(() => {
     if (typeof window === 'undefined') {
       return undefined
     }
 
-    writeNavigationState(getInitialView(), getInitialRequestModal(), 'replace')
+    writeNavigationState(projectId ? 'work' : getInitialView(), 'replace')
 
     const handlePopState = () => {
-      setActiveView(getInitialView())
-      setIsRequestModalOpen(getInitialRequestModal())
-      setIsFlowGenerating(false)
+      setActiveView(projectId ? 'work' : getInitialView())
     }
 
     window.addEventListener('popstate', handlePopState)
 
     return () => window.removeEventListener('popstate', handlePopState)
-  }, [writeNavigationState])
+  }, [projectId, writeNavigationState])
 
   useEffect(() => {
-    if (!isFlowGenerating) {
-      return undefined
-    }
-
-    let finishTimeout: number | undefined
-    let finishScheduled = false
-
-    const intervalId = window.setInterval(() => {
-      setFlowProgress((current) => {
-        const increment = current < 48 ? 11 : current < 82 ? 7 : 4
-        const next = Math.min(100, current + increment)
-
-        if (next >= 100 && !finishScheduled) {
-          finishScheduled = true
-          window.clearInterval(intervalId)
-          finishTimeout = window.setTimeout(() => {
-            addCurrentKpToHistory('Сформировано из заявки')
-            setIsFlowGenerating(false)
-            navigateToView('work')
-            setGenerationMessage('Документы сформированы. Проверьте рабочую таблицу КП.')
-          }, 520)
-        }
-
-        return next
-      })
-    }, 140)
-
-    return () => {
-      window.clearInterval(intervalId)
-      if (finishTimeout) {
-        window.clearTimeout(finishTimeout)
+    if (!selectedCatalogOption) {
+      if (selectedVariantId) {
+        setSelectedVariantId('')
       }
+      return
     }
-  }, [addCurrentKpToHistory, isFlowGenerating, navigateToView])
+
+    if (selectedVariantId !== selectedCatalogOption.variant.id) {
+      setSelectedVariantId(selectedCatalogOption.variant.id)
+      resetConstructorSalePrice()
+    }
+  }, [resetConstructorSalePrice, selectedCatalogOption, selectedVariantId])
+
+  useEffect(() => {
+    if (!projectId || initializedProjectRef.current === projectId) {
+      return
+    }
+
+    initializedProjectRef.current = projectId
+    const projectTitle = projectDeal?.title ?? 'Новое коммерческое предложение'
+
+    startPipeline('kp', projectTitle)
+    applyAutomaticSettingsForNewDocument()
+    updateExportField('counterpartyName', projectCounterparty?.name ?? '')
+    updateExportField('counterpartyAddress', projectCounterparty?.legalAddress ?? '')
+    updateExportField('objectAddress', projectObject?.address ?? '')
+    setActiveView('work')
+    writeNavigationState('work', 'replace')
+    setGenerationMessage(null)
+  }, [
+    applyAutomaticSettingsForNewDocument,
+    projectCounterparty,
+    projectDeal,
+    projectId,
+    projectObject,
+    startPipeline,
+    updateExportField,
+    writeNavigationState,
+  ])
 
   const makeKpDocumentPayload = useCallback(
     () => ({
@@ -585,6 +797,26 @@ export function KpEditorPage() {
   }
 
   const handleSave = () => {
+    if (projectId && draft.offerTable) {
+      const latestCrmState = loadCrmState()
+      const nextCrmState = upsertQuoteFromOfferTable(latestCrmState, {
+        dealId: projectId,
+        actorUserId: latestCrmState.currentUserId,
+        documentNumber: exportForm.documentNumber,
+        title: exportForm.documentTitle,
+        documentDate: exportForm.documentDate,
+        offerTable: draft.offerTable,
+      })
+
+      saveCrmState(nextCrmState)
+      setCrmState(nextCrmState)
+      addCurrentKpToHistory('Сохранено в проекте', 'manual')
+      setGenerationMessage(
+        `КП ${exportForm.documentNumber || 'без номера'} сохранено и прикреплено к проекту ${projectDeal?.number ?? ''}.`,
+      )
+      return
+    }
+
     addCurrentKpToHistory('Сохранено вручную', 'manual')
     setGenerationMessage('Изменения сохранены.')
   }
@@ -598,26 +830,33 @@ export function KpEditorPage() {
     }
   }
 
-  const handleDemoRequest = (scenario: KpDemoScenario) => {
-    setRequestText(scenario.requestText)
-    applyKpOfferTable(scenario.offerTable)
-  }
-
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    setAttachedFileName(file?.name ?? null)
-  }
-
-  const handleGenerateFromRequest = () => {
-    if (!requestText.trim() && !attachedFileName) {
+  const handleAddCatalogProduct = () => {
+    if (!selectedCatalogOption) {
       return
     }
 
-    applyAutomaticSettingsForNewDocument()
-    setIsRequestModalOpen(false)
-    writeNavigationState(activeView, false, 'replace')
-    setFlowProgress(0)
-    setIsFlowGenerating(true)
+    const currentSalePrice = parseMoneyInput(constructorSalePriceRef.current, 0)
+
+    if (currentSalePrice <= 0) {
+      setGenerationMessage('Введите цену продажи товара, которая должна уйти в КП.')
+      return
+    }
+
+    const item = makeCatalogOfferItem(
+      selectedCatalogOption,
+      constructorQty,
+      currentSalePrice,
+      '',
+    )
+
+    applyKpOfferTable(appendOfferItem(draft.offerTable, item))
+    resetConstructorSalePrice()
+    setGenerationMessage(`Позиция добавлена в КП: ${selectedCatalogOption.product.name}.`)
+  }
+
+  const handleAddEmptyLine = () => {
+    addOfferItem()
+    setGenerationMessage('Добавлена пустая строка для ручного заполнения.')
   }
 
   const renderHome = () => (
@@ -627,8 +866,8 @@ export function KpEditorPage() {
       </div>
 
       <div className="home-actions">
-        <button type="button" className="home-button primary-home" onClick={openRequestModal}>
-          <span>Создать</span>
+        <button type="button" className="home-button primary-home" onClick={() => navigateToView('work')}>
+          <span>Открыть конструктор</span>
         </button>
         <button type="button" className="home-button" onClick={() => navigateToView('history')}>
           <span>История</span>
@@ -647,8 +886,9 @@ export function KpEditorPage() {
           <h1>История</h1>
           <p>Ранее сформированные коммерческие предложения.</p>
         </div>
-        <button type="button" className="icon-button primary" onClick={openRequestModal}>
-          <span>Создать</span>
+        <button type="button" className="icon-button primary" onClick={() => navigateToView('work')}>
+          <Plus size={16} />
+          <span>Новое КП</span>
         </button>
       </div>
 
@@ -679,9 +919,10 @@ export function KpEditorPage() {
       ) : (
         <div className="history-empty">
           <h2>История пока пустая</h2>
-          <p>Создайте КП из заявки или сохраните рабочую таблицу, и запись появится здесь.</p>
-          <button type="button" className="icon-button primary" onClick={openRequestModal}>
-            <span>Создать КП</span>
+          <p>Соберите КП вручную через конструктор товаров и сохраните рабочую таблицу.</p>
+          <button type="button" className="icon-button primary" onClick={() => navigateToView('work')}>
+            <Plus size={16} />
+            <span>Открыть конструктор</span>
           </button>
         </div>
       )}
@@ -909,6 +1150,303 @@ export function KpEditorPage() {
     </section>
   )
 
+  const renderDocumentActions = (className = '') => (
+    <div className={`document-actions ${className}`.trim()}>
+      <button type="button" className="icon-button secondary" onClick={handleSave}>
+        <Save size={15} aria-hidden="true" />
+        <span>{projectId ? 'В проект' : 'Сохранить'}</span>
+      </button>
+      <button
+        type="button"
+        className="icon-button primary"
+        onClick={handleDownload}
+        disabled={isGeneratingWord || isOpeningWord}
+        title="Сохранить Word-файл"
+      >
+        <Save size={15} aria-hidden="true" />
+        <span>{isGeneratingWord ? 'Генерация...' : 'Word'}</span>
+      </button>
+      <button
+        type="button"
+        className="icon-button secondary"
+        onClick={handleOpenDocument}
+        disabled={isGeneratingWord || isOpeningWord}
+        title={lastSavedDoc ? 'Открыть сохранённый Word-файл' : 'Сначала сохраните Word-файл'}
+      >
+        <Eye size={15} aria-hidden="true" />
+        <span>{isOpeningWord ? 'Открытие...' : 'Открыть'}</span>
+      </button>
+    </div>
+  )
+
+  const renderDocumentControls = (className = '') => (
+    <section className={`document-controls ${className}`.trim()} aria-label="Поля коммерческого предложения">
+      <label className="control-field control-field-number">
+        <span>№ КП</span>
+        <input
+          value={exportForm.documentNumber}
+          onChange={(event) => handleDocumentNumberChange(event.target.value)}
+          placeholder="1-В"
+        />
+      </label>
+
+      <label className="control-field control-field-title">
+        <span>Имя КП</span>
+        <input
+          value={exportForm.documentTitle}
+          onChange={(event) => updateExportField('documentTitle', event.target.value)}
+          placeholder={exportForm.documentNumber || '1-В'}
+        />
+      </label>
+
+      <label className="control-field">
+        <span>Дата документа</span>
+        <input
+          type="date"
+          value={exportForm.documentDate}
+          onChange={(event) => updateExportField('documentDate', event.target.value)}
+        />
+      </label>
+
+      <label className="control-field control-field-wide">
+        <span>Адресат</span>
+        <input
+          value={exportForm.counterpartyName}
+          onChange={(event) => updateExportField('counterpartyName', event.target.value)}
+          placeholder="Наименование адресата"
+        />
+      </label>
+    </section>
+  )
+
+  const renderDocumentStatus = () => (
+    <>
+      {wordProgress ? (
+        <div className="word-download-progress" role="status" aria-live="polite">
+          <div className="word-download-progress-meta">
+            <span>{wordProgress.message}</span>
+            <strong>{Math.round(wordProgress.percent)}%</strong>
+          </div>
+          <div className="word-download-progress-track" aria-hidden="true">
+            <span style={{ width: `${Math.min(100, Math.max(0, wordProgress.percent))}%` }} />
+          </div>
+        </div>
+      ) : null}
+
+      {generationMessage ? <div className="generation-message">{generationMessage}</div> : null}
+    </>
+  )
+
+  const renderConstructorWorkspace = (mode: ConstructorWorkspaceMode = 'inline') => (
+    <>
+
+      <section className={`kp-constructor-panel ${mode === 'modal' ? 'is-modal-mode' : ''}`} aria-label="Конструктор товаров КП">
+        <div className="kp-constructor-head">
+          <div>
+            <h2>Конструктор КП</h2>
+            <p>
+              {(draft.offerTable?.items.length ?? 0)} позиций · {formatMoney(total)}
+            </p>
+          </div>
+          <div className="kp-constructor-head-controls">
+            {mode === 'inline' ? (
+              <button
+                type="button"
+                className="kp-constructor-expand-button"
+                onClick={() => setIsConstructorModalOpen(true)}
+                aria-label="Развернуть конструктор КП"
+                title="Развернуть конструктор КП"
+              >
+                <Maximize2 size={16} />
+              </button>
+            ) : null}
+            <div className="kp-constructor-actions">
+              <button type="button" className="icon-button secondary" onClick={handleAddEmptyLine}>
+                <Plus size={16} />
+                <span>Пустая строка</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="kp-constructor-layout">
+          <div className="kp-catalog-browser">
+            <label className="kp-catalog-search">
+              <span>Каталог товаров</span>
+              <div>
+                <Search size={16} />
+                <input
+                  value={catalogSearch}
+                  onChange={(event) => setCatalogSearch(event.target.value)}
+                  placeholder="Поиск по названию, артикулу, поставщику"
+                />
+              </div>
+            </label>
+
+            <div className="kp-catalog-filter-tools">
+              <button
+                type="button"
+                className={`kp-catalog-filter-toggle ${isCatalogFiltersOpen ? 'is-active' : ''}`}
+                onClick={() => setIsCatalogFiltersOpen((current) => !current)}
+              >
+                <SlidersHorizontal size={14} />
+                <span>Фильтры</span>
+              </button>
+              <span>{catalogCategoryOptions.find((item) => item.id === selectedCatalogCategory)?.label ?? 'Все типы'}</span>
+            </div>
+
+            {isCatalogFiltersOpen ? (
+              <div className="kp-catalog-filter-list" aria-label="Типы товаров">
+                {catalogCategoryOptions.map((category) => (
+                  <button
+                    key={category.id}
+                    type="button"
+                    className={category.id === selectedCatalogCategory ? 'is-active' : undefined}
+                    onClick={() => {
+                      setSelectedCatalogCategory(category.id)
+                      resetConstructorSalePrice()
+                    }}
+                  >
+                    <span>{category.label}</span>
+                    <small>{category.count}</small>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="kp-catalog-list" role="listbox" aria-label="Товары каталога">
+              {filteredCatalogOptions.map((option, index) => {
+                const active = selectedCatalogOption?.variant.id === option.variant.id
+                const variantMeta = getCatalogVariantMeta(option)
+
+                return (
+                  <button
+                    key={option.variant.id}
+                    type="button"
+                    className={active ? 'is-active' : undefined}
+                    onClick={() => {
+                      if (selectedVariantId !== option.variant.id) {
+                        resetConstructorSalePrice()
+                      }
+                      setSelectedVariantId(option.variant.id)
+                    }}
+                  >
+                    <span className="kp-catalog-item-number">{index + 1}</span>
+                    <span className="kp-catalog-item-copy">
+                      <strong>{option.product.name}</strong>
+                      <span>{[variantMeta, option.supplier.name].filter(Boolean).join(' · ')}</span>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="kp-product-inspector">
+            {selectedCatalogOption ? (
+              <>
+                <div className="kp-product-title">
+                  <div className="kp-product-hero">
+                    {selectedCatalogOption.product.imageUrl ? (
+                      <img
+                        className="kp-constructor-product-image"
+                        src={selectedCatalogOption.product.imageUrl}
+                        alt={selectedCatalogOption.product.name}
+                        loading="lazy"
+                      />
+                    ) : null}
+                    <div>
+                      <span>{selectedCatalogOption.product.category}</span>
+                      <div className="kp-product-title-row">
+                        <h3>{selectedCatalogOption.product.name}</h3>
+                        {selectedCatalogProductUrl ? (
+                          <a
+                            className="kp-product-link"
+                            href={selectedCatalogProductUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            aria-label="Открыть выбранный товар на сайте Вертикаль"
+                            title="Открыть выбранный товар на сайте Вертикаль"
+                          >
+                            <ExternalLink size={14} />
+                            <span>Вертикаль</span>
+                          </a>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                  <p>{selectedCatalogOption.product.description}</p>
+                </div>
+
+                <div className="kp-product-facts">
+                  <article>
+                    <span>Поставщик</span>
+                    <strong>{selectedCatalogOption.supplier.name}</strong>
+                    <small>{selectedCatalogOption.supplier.updateNote}</small>
+                  </article>
+                  <article>
+                    <span>Вариант</span>
+                    <strong>{selectedCatalogOption.variant.variantName}</strong>
+                    <small>{getVariantDetailLabel(selectedCatalogOption.variant)}</small>
+                  </article>
+                  <article>
+                    <span>Наличие</span>
+                    <strong>{selectedCatalogOption.variant.availability || selectedCatalogOption.product.availability}</strong>
+                    <small>обновлено {formatDateLabel(selectedCatalogOption.variant.updatedAt.slice(0, 10))}</small>
+                  </article>
+                </div>
+
+                <div className="kp-product-price-grid">
+                  <label>
+                    <span>Количество</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={constructorQty}
+                      onChange={(event) => setConstructorQty(Math.max(1, Math.round(Number(event.target.value) || 1)))}
+                    />
+                  </label>
+                  <label>
+                    <span>Цена продажи в КП</span>
+                    <input
+                      inputMode="decimal"
+                      value={constructorSalePrice}
+                      onChange={(event) => updateConstructorSalePrice(event.target.value)}
+                      placeholder="введите вручную"
+                    />
+                  </label>
+                  <article>
+                    <span>Закупка за ед.</span>
+                    <strong>{formatMoney(selectedCatalogOption.variant.purchasePrice)}</strong>
+                  </article>
+                </div>
+
+                <div className="kp-product-add-row">
+                  <button
+                    type="button"
+                    className="icon-button primary kp-product-add-button"
+                    onClick={handleAddCatalogProduct}
+                    disabled={!selectedCatalogOption}
+                  >
+                    <Plus size={15} />
+                    <span>Добавить</span>
+                  </button>
+                </div>
+
+              </>
+            ) : (
+              <div className="kp-product-empty">
+                <Building2 size={22} />
+                <strong>Каталог пуст</strong>
+                <span>Добавьте пустую строку и заполните КП вручную.</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+    </>
+  )
+
   const renderWork = () => (
     <>
       {downloadToast ? (
@@ -924,92 +1462,49 @@ export function KpEditorPage() {
         </div>
       ) : null}
 
-      <section className="editor-header">
-        <div>
-          <h1>Документ в работе: КП {exportForm.documentNumber || '1-В'}</h1>
+      <section className="editor-header kp-document-work-tile" style={documentWorkTileStyle}>
+        <div className="kp-document-work-summary">
+          <div>
+            <h1>Документ в работе: КП {exportForm.documentNumber || '1-В'}</h1>
+          </div>
+
+          <div className="editor-total">
+            <span>Общая сумма</span>
+            <strong>{formatMoney(total)}</strong>
+          </div>
+          {renderDocumentActions('kp-document-header-actions')}
         </div>
 
-        <div className="editor-total">
-          <span>Общая сумма</span>
-          <strong>{formatMoney(total)}</strong>
-        </div>
+        {renderDocumentControls('kp-document-top-controls')}
+        {renderDocumentStatus()}
       </section>
 
-      <section className="document-controls" aria-label="Поля коммерческого предложения">
-        <label className="control-field control-field-number">
-          <span>№ КП</span>
-          <input
-            value={exportForm.documentNumber}
-            onChange={(event) => handleDocumentNumberChange(event.target.value)}
-            placeholder="1-В"
-          />
-        </label>
-
-        <label className="control-field control-field-title">
-          <span>Имя КП</span>
-          <input
-            value={exportForm.documentTitle}
-            onChange={(event) => updateExportField('documentTitle', event.target.value)}
-            placeholder={exportForm.documentNumber || '1-В'}
-          />
-        </label>
-
-        <label className="control-field">
-          <span>Дата документа</span>
-          <input
-            type="date"
-            value={exportForm.documentDate}
-            onChange={(event) => updateExportField('documentDate', event.target.value)}
-          />
-        </label>
-
-        <label className="control-field control-field-wide">
-          <span>Адресат</span>
-          <input
-            value={exportForm.counterpartyName}
-            onChange={(event) => updateExportField('counterpartyName', event.target.value)}
-            placeholder="Наименование адресата"
-          />
-        </label>
-
-        <div className="document-actions">
-          <button type="button" className="icon-button secondary" onClick={handleSave}>
-            <span>Сохранить</span>
-          </button>
-          <button
-            type="button"
-            className="icon-button primary"
-            onClick={handleDownload}
-            disabled={isGeneratingWord || isOpeningWord}
-            title="Сохранить Word-файл"
-          >
-            <span>{isGeneratingWord ? 'Генерация...' : 'Сохранить Word'}</span>
-          </button>
-          <button
-            type="button"
-            className="icon-button secondary"
-            onClick={handleOpenDocument}
-            disabled={isGeneratingWord || isOpeningWord}
-            title={lastSavedDoc ? 'Открыть сохранённый Word-файл' : 'Сначала сохраните Word-файл'}
-          >
-            <span>{isOpeningWord ? 'Открытие...' : 'Открыть'}</span>
-          </button>
-        </div>
-      </section>
-
-      {wordProgress ? (
-        <div className="word-download-progress" role="status" aria-live="polite">
-          <div className="word-download-progress-meta">
-            <span>{wordProgress.message}</span>
-            <strong>{Math.round(wordProgress.percent)}%</strong>
-          </div>
-          <div className="word-download-progress-track" aria-hidden="true">
-            <span style={{ width: `${Math.min(100, Math.max(0, wordProgress.percent))}%` }} />
-          </div>
-        </div>
+      {projectDeal ? (
+        <section className="kp-project-context" aria-label="Контекст проекта">
+          <article>
+            <span>Проект</span>
+            <strong>{projectDeal.number} · {projectDeal.title}</strong>
+            <small>{projectDeal.description || 'Описание проекта не заполнено'}</small>
+          </article>
+          <article>
+            <span>Контрагент</span>
+            <strong>{projectCounterparty?.shortName ?? 'не указан'}</strong>
+            <small>
+              ИНН {projectCounterparty?.inn || 'не указан'} · КПП {projectCounterparty?.kpp || 'не указан'}
+            </small>
+          </article>
+          <article>
+            <span>Объект</span>
+            <strong>{projectObject?.name ?? 'не указан'}</strong>
+            <small>{projectObject?.address ?? 'адрес не указан'}</small>
+          </article>
+          <article>
+            <span>Документы</span>
+            <strong>{projectDocuments.length} вложений</strong>
+            <small>{projectDocuments[0]?.title ?? 'КП будет прикреплено после сохранения'}</small>
+          </article>
+        </section>
       ) : null}
-
-      {generationMessage ? <div className="generation-message">{generationMessage}</div> : null}
 
       <KpOfferTableEditor
         offerTable={draft.offerTable}
@@ -1022,15 +1517,51 @@ export function KpEditorPage() {
         validityDays={settings.validityDays}
         vatRate={settings.vatRate}
         showOperatorColumns={settings.showOperatorColumns}
+        operatorPanel={renderConstructorWorkspace()}
+        workspaceAlign="start"
+        onPagePreviewWidthChange={handlePagePreviewWidthChange}
         onUpdateOfferItem={updateOfferItem}
         onDeleteOfferItem={deleteOfferItem}
       />
+
+      {isConstructorModalOpen ? (
+        <div
+          className="kp-constructor-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsConstructorModalOpen(false)
+            }
+          }}
+        >
+          <section className="kp-constructor-modal" role="dialog" aria-modal="true" aria-label="Развернутый конструктор КП">
+            <header className="kp-constructor-modal-head">
+              <div>
+                <span>Расширенный режим</span>
+                <h2>Конструктор КП</h2>
+              </div>
+              <button
+                type="button"
+                className="kp-constructor-modal-close"
+                onClick={() => setIsConstructorModalOpen(false)}
+                aria-label="Закрыть конструктор КП"
+                title="Закрыть"
+              >
+                <X size={18} />
+              </button>
+            </header>
+            <div className="kp-constructor-modal-body">
+              {renderConstructorWorkspace('modal')}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </>
   )
 
   return (
-    <div className={`app-shell ${activeView === 'work' ? 'app-shell-work' : ''}`}>
-      {activeView !== 'home' ? (
+    <div className={`app-shell ${activeView === 'work' ? 'app-shell-work' : ''} ${darkTheme ? 'is-dark' : ''} ${embedded ? 'is-embedded' : ''}`}>
+      {!embedded && activeView !== 'home' ? (
         <header className="topbar">
           <nav className="nav" aria-label="Разделы">
             <button
@@ -1065,105 +1596,6 @@ export function KpEditorPage() {
         {activeView === 'settings' ? renderSettings() : null}
       </main>
 
-      {isRequestModalOpen ? (
-        <div className="kp-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="request-modal-title">
-          <section className="kp-request-modal">
-            <div className="request-modal-header">
-              <div>
-                <h2 id="request-modal-title">Новая заявка</h2>
-                <p>
-                  Вставьте только позиции, которые нужно закупить, или прикрепите документ с
-                  перечнем товаров. Без заказчика, объекта, условий и прочих реквизитов.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="modal-close"
-                aria-label="Закрыть"
-                onClick={closeRequestModal}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <textarea
-              className="request-textarea"
-              value={requestText}
-              onChange={(event) => setRequestText(event.target.value)}
-              placeholder="Вставьте сюда только закупаемые позиции: наименование, количество, единицы измерения..."
-            />
-
-            <div className="request-modal-footer">
-              <input
-                ref={fileInputRef}
-                className="request-file-input"
-                type="file"
-                accept=".doc,.docx,.pdf,.txt,.xlsx,.xls"
-                onChange={handleFileChange}
-              />
-
-              <div className="request-attach-group">
-                <button
-                  type="button"
-                  className="request-upload-button"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Paperclip size={18} />
-                  <span>Прикрепить документ</span>
-                </button>
-                {attachedFileName ? (
-                  <span className="attached-file">
-                    <FileText size={16} />
-                    {attachedFileName}
-                  </span>
-                ) : null}
-              </div>
-
-              <div className="request-actions">
-                <div className="request-demo-buttons" aria-label="Демо-заявки">
-                  {kpDemoScenarios.map((scenario, index) => (
-                    <button
-                      key={scenario.id}
-                      type="button"
-                      className="icon-button secondary"
-                      onClick={() => handleDemoRequest(scenario)}
-                      title={scenario.title}
-                    >
-                      <Sparkles size={16} />
-                      <span>Демо {index + 1}</span>
-                    </button>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  className="icon-button primary"
-                  onClick={handleGenerateFromRequest}
-                  disabled={!requestText.trim() && !attachedFileName}
-                >
-                  <span>Далее</span>
-                  <ArrowRight size={16} />
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
-
-      {isFlowGenerating ? (
-        <div className="kp-modal-backdrop loading-backdrop" role="dialog" aria-modal="true">
-          <section className="kp-loading-modal" aria-label="Генерация документов">
-            <div className="loading-spinner">
-              <Loader2 size={34} />
-            </div>
-            <h2>Генерация документов</h2>
-            <p>Разбираем заявку, сопоставляем позиции и собираем рабочую таблицу КП.</p>
-            <div className="loading-progress" aria-label={`Готово ${flowProgress}%`}>
-              <span style={{ width: `${flowProgress}%` }} />
-            </div>
-            <strong>{flowProgress}%</strong>
-          </section>
-        </div>
-      ) : null}
     </div>
   )
 }

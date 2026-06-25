@@ -1,6 +1,6 @@
 import { ExternalLink, Trash2 } from 'lucide-react'
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import type {
   DemoOfferTable,
   DraftCellAnnotation,
@@ -22,10 +22,18 @@ import {
 } from '../lib/kpFormatting'
 import { getEffectivePurchaseUnitPrice } from '../lib/kpPricing'
 import { cn } from '../lib/utils'
-import { resolveVerticalProductUrl } from '../lib/verticalProducts'
+import { resolveVerticalProductImageUrl, resolveVerticalProductUrl } from '../lib/verticalProducts'
 
 const numericFields: OfferItemEditableField[] = ['quantity', 'unitPrice', 'installationUnitPrice']
 const operatorWorkspaceWidth = 1340
+const operatorDocumentPageWidth = 794
+const operatorPanelLeft = 813
+const operatorPanelMinWidth = 526
+const operatorPanelRightInset = 14
+const operatorPanelViewportInset = 4
+const operatorPanelPreferredLift = 420
+const operatorPanelMinHeight = 360
+const operatorPanelExtensionGap = 4
 const percentFormatter = new Intl.NumberFormat('ru-RU', {
   minimumFractionDigits: 0,
   maximumFractionDigits: 0,
@@ -74,9 +82,12 @@ interface KpOfferTableEditorProps {
   validityDays?: number
   vatRate?: number
   showOperatorColumns?: boolean
+  operatorPanel?: ReactNode
+  workspaceAlign?: 'center' | 'start'
+  onPagePreviewWidthChange?: (width: number) => void
   onUpdateOfferItem?: (itemId: string, field: OfferItemEditableField, value: string) => void
-  onAddOfferItem?: () => void
   onDeleteOfferItem?: (itemId: string) => void
+  onAddOfferItem?: () => void
   onUpdateField?: (fieldId: DraftField['id'], value: string) => void
 }
 
@@ -89,6 +100,9 @@ export function KpOfferTableEditor({
   validityDays = kpValidityDays,
   vatRate = kpVatRate,
   showOperatorColumns = true,
+  operatorPanel,
+  workspaceAlign = 'center',
+  onPagePreviewWidthChange,
   onUpdateOfferItem,
   onDeleteOfferItem,
 }: KpOfferTableEditorProps) {
@@ -96,6 +110,8 @@ export function KpOfferTableEditor({
   const [editingValue, setEditingValue] = useState('')
   const [selectedOperatorItemId, setSelectedOperatorItemId] = useState<string | null>(null)
   const [workspaceScale, setWorkspaceScale] = useState(1)
+  const [operatorPanelWidth, setOperatorPanelWidth] = useState(operatorPanelMinWidth)
+  const [operatorPanelPlacement, setOperatorPanelPlacement] = useState({ top: -282, height: 620 })
   const workspaceStageRef = useRef<HTMLDivElement | null>(null)
   const tableHeaderRef = useRef<HTMLTableRowElement | null>(null)
   const totalRowRef = useRef<HTMLTableRowElement | null>(null)
@@ -140,7 +156,12 @@ export function KpOfferTableEditor({
     return { purchaseTotal, margin, marginPercent }
   }, [operatorRows])
   const activeOperatorItemId = selectedOperatorItemId ?? operatorRows[0]?.item.id ?? null
-  const workspaceStageStyle = { '--operator-workspace-scale': workspaceScale } as CSSProperties
+  const workspaceStageStyle = {
+    '--operator-workspace-scale': workspaceScale,
+    '--operator-panel-width': `${operatorPanelWidth}px`,
+    '--operator-panel-top': `${operatorPanelPlacement.top}px`,
+    '--operator-panel-height': `${operatorPanelPlacement.height}px`,
+  } as CSSProperties
 
   useLayoutEffect(() => {
     if (typeof window === 'undefined') {
@@ -148,13 +169,43 @@ export function KpOfferTableEditor({
     }
 
     const updateWorkspaceScale = () => {
-      const availableWidth = workspaceStageRef.current?.clientWidth ?? window.innerWidth
+      const availableWidth = workspaceStageRef.current?.clientWidth || window.innerWidth
       const nextScale = Math.min(1, availableWidth / operatorWorkspaceWidth)
+      const centeredWorkspaceLeft =
+        workspaceAlign === 'center' && availableWidth >= operatorWorkspaceWidth
+          ? (availableWidth - operatorWorkspaceWidth) / 2
+          : 0
+      const visiblePanelLeft = centeredWorkspaceLeft + operatorPanelLeft * nextScale
+      const visiblePanelWidth = availableWidth - visiblePanelLeft - operatorPanelRightInset
+      const nextPanelWidth = Math.max(operatorPanelMinWidth, visiblePanelWidth / nextScale)
+      const stageTop = workspaceStageRef.current?.getBoundingClientRect().top ?? 0
+      const extensionTop = workspaceStageRef.current
+        ?.querySelector('.operator-extension-table')
+        ?.getBoundingClientRect().top
+      const visiblePanelTop = Math.max(operatorPanelViewportInset, stageTop - operatorPanelPreferredLift)
+      const visiblePanelBottomLimit = extensionTop
+        ? Math.min(window.innerHeight - operatorPanelViewportInset, extensionTop - operatorPanelExtensionGap)
+        : window.innerHeight - operatorPanelViewportInset
+      const visiblePanelBottom = Math.max(visiblePanelTop, visiblePanelBottomLimit)
+      const nextPanelTop = (visiblePanelTop - stageTop) / nextScale
+      const nextPanelHeight = Math.max(operatorPanelMinHeight, (visiblePanelBottom - visiblePanelTop) / nextScale)
 
       setWorkspaceScale((current) => (Math.abs(current - nextScale) < 0.001 ? current : nextScale))
+      setOperatorPanelWidth((current) => (Math.abs(current - nextPanelWidth) < 0.5 ? current : nextPanelWidth))
+      setOperatorPanelPlacement((current) =>
+        Math.abs(current.top - nextPanelTop) < 0.5 && Math.abs(current.height - nextPanelHeight) < 0.5
+          ? current
+          : { top: nextPanelTop, height: nextPanelHeight },
+      )
+      onPagePreviewWidthChange?.(operatorDocumentPageWidth * nextScale)
     }
 
     const frameId = window.requestAnimationFrame(updateWorkspaceScale)
+    const timeoutIds = [
+      window.setTimeout(updateWorkspaceScale, 80),
+      window.setTimeout(updateWorkspaceScale, 260),
+      window.setTimeout(updateWorkspaceScale, 620),
+    ]
     const resizeObserver =
       'ResizeObserver' in window && workspaceStageRef.current
         ? new ResizeObserver(updateWorkspaceScale)
@@ -165,13 +216,16 @@ export function KpOfferTableEditor({
     }
 
     window.addEventListener('resize', updateWorkspaceScale)
+    window.addEventListener('scroll', updateWorkspaceScale, { passive: true })
 
     return () => {
       window.cancelAnimationFrame(frameId)
+      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId))
       resizeObserver?.disconnect()
       window.removeEventListener('resize', updateWorkspaceScale)
+      window.removeEventListener('scroll', updateWorkspaceScale)
     }
-  }, [])
+  }, [onPagePreviewWidthChange, workspaceAlign])
 
   useLayoutEffect(() => {
     if (typeof window === 'undefined') {
@@ -242,6 +296,7 @@ export function KpOfferTableEditor({
     const value = String(item[field] ?? '')
     const displayValue = getEditableDisplayValue(item, field)
     const numeric = numericFields.includes(field)
+    const productImageUrl = field === 'description' ? resolveVerticalProductImageUrl(item) : undefined
 
     return (
       <td
@@ -251,6 +306,7 @@ export function KpOfferTableEditor({
           editable ? 'kp-doc-cell-interactive' : '',
           align === 'right' ? 'kp-doc-cell-right' : '',
           align === 'center' ? 'kp-doc-cell-center' : '',
+          productImageUrl ? 'kp-doc-description-cell' : '',
         )}
       >
         {isEditing ? (
@@ -299,6 +355,11 @@ export function KpOfferTableEditor({
               )}
             />
           )
+        ) : productImageUrl ? (
+          <span className="kp-doc-product-cell">
+            <img className="kp-doc-product-image" src={productImageUrl} alt={displayValue || item.productCode} />
+            <span className={displayValue ? '' : 'kp-doc-placeholder'}>{displayValue || placeholder}</span>
+          </span>
         ) : (
           <span className={displayValue ? '' : 'kp-doc-placeholder'}>{displayValue || placeholder}</span>
         )}
@@ -351,7 +412,11 @@ export function KpOfferTableEditor({
   }
 
   return (
-    <div className="word-stage" ref={workspaceStageRef} style={workspaceStageStyle}>
+    <div
+      className={cn('word-stage', workspaceAlign === 'start' ? 'is-workspace-start' : '')}
+      ref={workspaceStageRef}
+      style={workspaceStageStyle}
+    >
       <div className="operator-workspace">
         <article className="word-page" aria-label="Рабочий лист коммерческого предложения">
           <img className="kp-doc-brand-header" src="/templates/kp-header.png" alt="" />
@@ -367,6 +432,12 @@ export function KpOfferTableEditor({
           <h1 className="kp-doc-title">
             Коммерческое предложение № {documentNumber.trim() || kpDocumentNumber} от {formatDateRu(documentDate)} г
           </h1>
+
+          {showOperatorColumns && operatorPanel ? (
+            <aside className="operator-constructor-panel" aria-label="Рабочая область конструктора КП">
+              <div className="operator-constructor-panel-scroll">{operatorPanel}</div>
+            </aside>
+          ) : null}
 
           <div className="kp-table-with-extension">
             <table className="word-table kp-offer-table">
@@ -403,21 +474,21 @@ export function KpOfferTableEditor({
                       onMouseEnter={() => setSelectedOperatorItemId(item.id)}
                     >
                       <td className="kp-doc-cell kp-doc-cell-center kp-row-number-cell">
-                        <span>{index + 1}</span>
-                        {editable ? (
+                        {onDeleteOfferItem ? (
                           <button
                             type="button"
+                            className="kp-doc-row-delete-button"
                             onClick={(event) => {
                               event.stopPropagation()
-                              onDeleteOfferItem?.(item.id)
+                              onDeleteOfferItem(item.id)
                             }}
-                            className="kp-row-delete"
-                            aria-label="Удалить строку"
-                            title="Удалить строку"
+                            aria-label={`Удалить позицию ${index + 1} из КП`}
+                            title="Удалить позицию из КП"
                           >
-                            <Trash2 size={13} />
+                            <Trash2 size={12} />
                           </button>
                         ) : null}
+                        <span>{index + 1}</span>
                       </td>
                       {renderEditableCell({
                         item,

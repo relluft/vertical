@@ -63,7 +63,7 @@ export function DocumentPreview({
         editable={!readOnly}
         onUpdateOfferItem={onUpdateOfferItem}
         onAddOfferItem={onAddOfferItem}
-        onDeleteOfferItem={onDeleteOfferItem}
+        onDeleteOfferItem={readOnly ? undefined : onDeleteOfferItem}
         onUpdateField={onUpdateField}
       />
     )

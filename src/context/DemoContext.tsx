@@ -43,7 +43,7 @@ import type {
   RecentOperation,
 } from '../types/demo'
 
-const storageKey = 'nuoperator-kp-editor-state-v2'
+const storageKey = 'uchet-system-kp-editor-state-v2'
 const removedFastenersPattern =
   /^.*(?:Креп[её]ж и доборные элементы для монтажа|состав уточнить|состав не указан).*$/gim
 const removedFastenersId = 'offer-missing-fasteners'

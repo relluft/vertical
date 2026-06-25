@@ -13,6 +13,7 @@ import {
   kpValidityDays,
   makeKpFileName,
 } from './kpFormatting'
+import { resolveVerticalProductImageUrl } from './verticalProducts'
 
 interface KpDocumentPayload {
   offerTable: DemoOfferTable | null
@@ -91,6 +92,13 @@ type VerticalAlign = 'top' | 'center' | 'bottom'
 interface KpTemplateAsset {
   location: string
   base64: string
+}
+
+interface KpProductImageAsset {
+  relationshipId: string
+  location: string
+  base64: string
+  docPrId: number
 }
 
 interface RunOptions {
@@ -191,6 +199,59 @@ async function loadKpTemplateAssets(onProgress?: ProgressCallback) {
     signature,
     stamp,
   }
+}
+
+function getImageExtension(path: string) {
+  const cleanPath = path.split('?')[0]?.toLowerCase() ?? ''
+
+  if (cleanPath.endsWith('.png')) {
+    return 'png'
+  }
+
+  if (cleanPath.endsWith('.webp')) {
+    return 'webp'
+  }
+
+  return 'jpg'
+}
+
+async function loadProductImageAsset(
+  imageUrl: string,
+  index: number,
+): Promise<KpProductImageAsset | null> {
+  try {
+    const response = await fetch(getAssetUrl(imageUrl))
+
+    if (!response.ok) {
+      return null
+    }
+
+    const extension = getImageExtension(imageUrl)
+
+    return {
+      relationshipId: `rIdProductImage${index + 1}`,
+      location: `product-${index + 1}.${extension}`,
+      base64: await blobToBase64(await response.blob()),
+      docPrId: 100 + index,
+    }
+  } catch {
+    return null
+  }
+}
+
+async function loadProductImageAssets(offerTable: DemoOfferTable | null) {
+  const items = offerTable?.items ?? []
+  const imageAssets = await Promise.all(
+    items.map((item, index) => {
+      const imageUrl = resolveVerticalProductImageUrl(item)
+
+      return imageUrl ? loadProductImageAsset(imageUrl, index) : Promise.resolve(null)
+    }),
+  )
+
+  return Object.fromEntries(
+    imageAssets.flatMap((asset, index) => (asset ? [[items[index].id, asset] as const] : [])),
+  )
 }
 
 function waitForUi() {
@@ -404,7 +465,55 @@ function dataCell(text: string | number, width: number, align: ParagraphAlign = 
   })
 }
 
-function renderOfferTable(data: DocxPayloadData) {
+const productImageSizeTwips = Math.round(1440 * (2 / 2.54))
+
+function productDescriptionCell(
+  item: DemoOfferTable['items'][number],
+  description: string,
+  width: number,
+  productImage?: KpProductImageAsset,
+) {
+  if (!productImage) {
+    return dataCell(description, width)
+  }
+
+  const textWidth = Math.max(1000, width - productImageSizeTwips - 160)
+  const imageParagraph = paragraph(
+    imageRun(
+      productImage.relationshipId,
+      productImage.location,
+      productImageSizeTwips,
+      productImageSizeTwips,
+      productImage.docPrId,
+    ),
+    { align: 'center', after: 0 },
+  )
+  const content = renderTable(
+    [productImageSizeTwips, textWidth],
+    tableRow(
+      [
+        tableCell(imageParagraph, {
+          width: productImageSizeTwips,
+          verticalAlign: 'center',
+          noBorders: true,
+        }),
+        tableCell(textParagraph(description || item.productCode, { size: 18, after: 0 }), {
+          width: textWidth,
+          verticalAlign: 'center',
+          noBorders: true,
+        }),
+      ].join(''),
+    ),
+    false,
+  )
+
+  return tableCell(content, {
+    width,
+    verticalAlign: 'center',
+  })
+}
+
+function renderOfferTable(data: DocxPayloadData, productImages: Record<string, KpProductImageAsset>) {
   const items = data.offerTable?.items ?? []
   const rowsToRender = items.length ? items : [makeEmptyOfferItem()]
   const headerRow = tableRow(
@@ -428,7 +537,7 @@ function renderOfferTable(data: DocxPayloadData) {
       return tableRow(
         [
           dataCell(number, offerTableColumnsTwips[0], 'center'),
-          dataCell(description, offerTableColumnsTwips[1]),
+          productDescriptionCell(item, description, offerTableColumnsTwips[1], productImages[item.id]),
           dataCell(items.length ? formatQuantity(item.quantity || 0) : '', offerTableColumnsTwips[2], 'center'),
           dataCell(item.unit || 'шт', offerTableColumnsTwips[3], 'center'),
           dataCell(items.length ? formatMoney(unitPrice) : '', offerTableColumnsTwips[4], 'right'),
@@ -525,7 +634,11 @@ function renderSignatureBlock(assets: Record<KpTemplateAssetName, KpTemplateAsse
   return renderTable(columns, rows, false)
 }
 
-function renderDocumentXml(data: DocxPayloadData, assets: Record<KpTemplateAssetName, KpTemplateAsset>) {
+function renderDocumentXml(
+  data: DocxPayloadData,
+  assets: Record<KpTemplateAssetName, KpTemplateAsset>,
+  productImages: Record<string, KpProductImageAsset>,
+) {
   const headerWidthTwips = 8200
   const headerHeightTwips = imageHeightFromAspect(headerWidthTwips, 596, 158)
   const validUntil = formatDateRu(addCalendarDays(data.documentDate, data.validityDays))
@@ -578,7 +691,7 @@ function renderDocumentXml(data: DocxPayloadData, assets: Record<KpTemplateAsset
       after: 180,
       keepNext: true,
     })}
-    ${renderOfferTable(data)}
+    ${renderOfferTable(data, productImages)}
     ${textParagraph('СТОИМОСТЬ ВКЛЮЧАЕТ ДОСТАВКУ.', {
       bold: true,
       size: 22,
@@ -609,6 +722,9 @@ function renderContentTypesXml() {
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
+  <Default Extension="jpeg" ContentType="image/jpeg"/>
+  <Default Extension="webp" ContentType="image/webp"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
@@ -626,12 +742,20 @@ function renderPackageRelationshipsXml() {
 </Relationships>`
 }
 
-function renderDocumentRelationshipsXml() {
+function renderDocumentRelationshipsXml(productImages: Record<string, KpProductImageAsset>) {
+  const productImageRelationships = Object.values(productImages)
+    .map(
+      (asset) =>
+        `<Relationship Id="${asset.relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${asset.location}"/>`,
+    )
+    .join('')
+
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rIdHeader" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/kp-header.png"/>
   <Relationship Id="rIdSignature" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/kp-signature.png"/>
   <Relationship Id="rIdStamp" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/kp-stamp.png"/>
+  ${productImageRelationships}
   <Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
   <Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
 </Relationships>`
@@ -679,8 +803,8 @@ function renderCorePropertiesXml() {
   xmlns:dcmitype="http://purl.org/dc/dcmitype/"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <dc:title>Коммерческое предложение</dc:title>
-  <dc:creator>Вертикаль КП</dc:creator>
-  <cp:lastModifiedBy>Вертикаль КП</cp:lastModifiedBy>
+  <dc:creator>Учетная система</dc:creator>
+  <cp:lastModifiedBy>Учетная система</cp:lastModifiedBy>
   <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
   <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
 </cp:coreProperties>`
@@ -690,17 +814,21 @@ function renderAppPropertiesXml() {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
   xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>Вертикаль КП</Application>
+  <Application>Учетная система</Application>
 </Properties>`
 }
 
-async function renderDocxBlob(data: DocxPayloadData, assets: Record<KpTemplateAssetName, KpTemplateAsset>) {
+async function renderDocxBlob(
+  data: DocxPayloadData,
+  assets: Record<KpTemplateAssetName, KpTemplateAsset>,
+  productImages: Record<string, KpProductImageAsset>,
+) {
   const zip = new JSZip()
 
   zip.file('[Content_Types].xml', renderContentTypesXml())
   zip.file('_rels/.rels', renderPackageRelationshipsXml())
-  zip.file('word/document.xml', renderDocumentXml(data, assets))
-  zip.file('word/_rels/document.xml.rels', renderDocumentRelationshipsXml())
+  zip.file('word/document.xml', renderDocumentXml(data, assets, productImages))
+  zip.file('word/_rels/document.xml.rels', renderDocumentRelationshipsXml(productImages))
   zip.file('word/styles.xml', renderStylesXml())
   zip.file('word/settings.xml', renderSettingsXml())
   zip.file('docProps/core.xml', renderCorePropertiesXml())
@@ -708,6 +836,9 @@ async function renderDocxBlob(data: DocxPayloadData, assets: Record<KpTemplateAs
   zip.file('word/media/kp-header.png', assets.header.base64, { base64: true })
   zip.file('word/media/kp-signature.png', assets.signature.base64, { base64: true })
   zip.file('word/media/kp-stamp.png', assets.stamp.base64, { base64: true })
+  Object.values(productImages).forEach((asset) => {
+    zip.file(`word/media/${asset.location}`, asset.base64, { base64: true })
+  })
 
   return zip.generateAsync({
     type: 'blob',
@@ -734,9 +865,10 @@ async function generateKpDocBlob(payload: KpDocumentPayload, onProgress?: Progre
     total: getOfferSaleTotal(payload.offerTable),
   }
   const templateAssets = await loadKpTemplateAssets(onProgress)
+  const productImages = await loadProductImageAssets(data.offerTable)
 
   await reportProgress(onProgress, 62, 'Формируем Word-документ')
-  const blob = await renderDocxBlob(data, templateAssets)
+  const blob = await renderDocxBlob(data, templateAssets, productImages)
   await reportProgress(onProgress, 82, 'Готовим файл DOCX')
 
   return blob

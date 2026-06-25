@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'nuoperator-pwa-v1'
+const CACHE_VERSION = 'uchet-system-pwa-v1'
 const CORE_CACHE = `${CACHE_VERSION}-core`
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`
 

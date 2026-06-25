@@ -1,9 +1,9 @@
 export const brandConfig = {
-  logo: 'ВК',
-  companyName: 'Вертикаль КП',
+  logo: 'УС',
+  companyName: 'Учетная система',
   primaryColor: '#284c61',
   productTagline:
-    'Из грязной заявки - в подробное КП по товарам Вертикаль',
-  documentHeader: 'Демо-комплект КП по товарам Вертикаль',
+    'Из заявки - в подробное КП с товарами, ценами и маржой',
+  documentHeader: 'Демо-комплект КП учетной системы',
   signatureBlock: 'Директор ООО «Безбарьерная среда»',
 } as const
