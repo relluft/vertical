@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion, type Transition } from 'framer-motion'
 import { BriefcaseBusiness, Loader2, LockKeyhole, UserRound, X } from 'lucide-react'
 import { useCallback, useEffect, useState, type FormEvent, type PointerEvent } from 'react'
 import { DemoProvider } from './context/DemoContext'
@@ -520,6 +520,7 @@ function App() {
   const [appRoute, setAppRoute] = useState<AppNavigationRoute>(readBrowserRoute)
   const [authSession, setAuthSession] = useState<AuthSession | null>(loadStoredAuthSession)
   const [darkTheme, setDarkTheme] = useState(loadStoredDarkTheme)
+  const reduceMotion = useReducedMotion()
 
   const navigateApp = useCallback((route: AppNavigationRoute, mode: NavigationMode = 'push') => {
     setAppRoute(route)
@@ -608,29 +609,55 @@ function App() {
     )
   }
 
+  const sessionTransition: Transition = reduceMotion
+    ? { duration: 0.01 }
+    : { duration: 0.16, ease: [0.22, 1, 0.36, 1] }
+  const sessionInitial = reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.998 }
+  const sessionAnimate = reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }
+  const sessionExit = reduceMotion ? { opacity: 0 } : { opacity: 0, y: -6, scale: 0.998 }
+
   return (
     <DemoProvider>
-      {!authSession ? (
-        <LoginLanding onLogin={handleLogin} />
-      ) : (
-        <CrmSystemPage
-          key={`${appRoute.crmModule}:${appRoute.crmFilter}`}
-          authRole={authSession.role}
-          darkTheme={darkTheme}
-          routeFilter={appRoute.crmFilter}
-          routeModule={appRoute.crmModule}
-          showKpEditor={appRoute.surface === 'kp'}
-          kpEditor={
-            appRoute.surface === 'kp' ? (
-              <KpEditorPage projectId={appRoute.kpProjectId} darkTheme={darkTheme} embedded />
-            ) : null
-          }
-          onThemeToggle={() => setDarkTheme((current) => !current)}
-          onRouteChange={handleCrmRouteChange}
-          onLogout={handleLogout}
-          onOpenKpEditor={handleOpenKpEditor}
-        />
-      )}
+      <AnimatePresence mode="wait" initial={false}>
+        {!authSession ? (
+          <motion.div
+            key="login"
+            className="app-session-transition"
+            initial={sessionInitial}
+            animate={sessionAnimate}
+            exit={sessionExit}
+            transition={sessionTransition}
+          >
+            <LoginLanding onLogin={handleLogin} />
+          </motion.div>
+        ) : (
+          <motion.div
+            key={`session-${authSession.role}`}
+            className="app-session-transition"
+            initial={sessionInitial}
+            animate={sessionAnimate}
+            exit={sessionExit}
+            transition={sessionTransition}
+          >
+            <CrmSystemPage
+              authRole={authSession.role}
+              darkTheme={darkTheme}
+              routeFilter={appRoute.crmFilter}
+              routeModule={appRoute.crmModule}
+              showKpEditor={appRoute.surface === 'kp'}
+              kpEditor={
+                appRoute.surface === 'kp' ? (
+                  <KpEditorPage projectId={appRoute.kpProjectId} darkTheme={darkTheme} embedded />
+                ) : null
+              }
+              onThemeToggle={() => setDarkTheme((current) => !current)}
+              onRouteChange={handleCrmRouteChange}
+              onLogout={handleLogout}
+              onOpenKpEditor={handleOpenKpEditor}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </DemoProvider>
   )
 }

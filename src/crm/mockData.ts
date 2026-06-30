@@ -9,6 +9,7 @@ import type {
   TaskRecord,
   WorkObject,
 } from './types'
+import { parserMockPriceHistory, parserMockProducts, parserMockVariants } from '../lib/parserMockCatalog'
 import { verticalMockPriceHistory, verticalMockProducts, verticalMockVariants } from '../lib/verticalMockCatalog'
 
 export const demoTodayIso = '2026-06-22'
@@ -1198,7 +1199,52 @@ export const seedCrmState: CrmState = {
       isActive: true,
       lastUpdatedAt: '2026-06-22T06:20:00.000Z',
       updateStatus: 'fresh',
-      updateNote: 'Мок-каталог из локального парсера: 50 отобранных позиций.',
+      updateNote: 'Локальный каталог: 50 отобранных позиций.',
+      logoUrl: '/mock/supplier-logos/vertical.jpg',
+    },
+    {
+      id: 'sup-invakor',
+      name: 'Инвакор',
+      code: 'invakor',
+      sourceType: 'site_catalog',
+      isActive: true,
+      lastUpdatedAt: '2026-06-26T11:17:51.000Z',
+      updateStatus: 'fresh',
+      updateNote: 'Локальная выгрузка каталога: 20 отобранных позиций.',
+      logoUrl: '/mock/supplier-logos/invakor.png',
+    },
+    {
+      id: 'sup-istok-audio',
+      name: 'Исток-Аудио',
+      code: 'istok-audio',
+      sourceType: 'site_catalog',
+      isActive: true,
+      lastUpdatedAt: '2026-06-26T10:06:13.000Z',
+      updateStatus: 'fresh',
+      updateNote: 'Локальная выгрузка каталога: 17 отобранных позиций.',
+      logoUrl: '/mock/supplier-logos/istok-audio.webp',
+    },
+    {
+      id: 'sup-safetystep',
+      name: 'Safetystep',
+      code: 'safetystep',
+      sourceType: 'site_catalog',
+      isActive: true,
+      lastUpdatedAt: '2026-06-26T10:05:14.000Z',
+      updateStatus: 'fresh',
+      updateNote: 'Локальная выгрузка каталога: 14 отобранных позиций.',
+      logoUrl: '/mock/supplier-logos/safetystep.jpg',
+    },
+    {
+      id: 'sup-nepaday',
+      name: 'Не Падай',
+      code: 'nepaday',
+      sourceType: 'site_catalog',
+      isActive: true,
+      lastUpdatedAt: '2026-06-26T10:05:43.000Z',
+      updateStatus: 'fresh',
+      updateNote: 'Локальная выгрузка каталога: 11 отобранных позиций.',
+      logoUrl: '/mock/supplier-logos/nepaday.png',
     },
     {
       id: 'sup-access',
@@ -1251,9 +1297,9 @@ export const seedCrmState: CrmState = {
       updateNote: 'Ручное обновление остатков менеджером.',
     },
   ],
-  products: verticalMockProducts,
-  variants: verticalMockVariants,
-  priceHistory: verticalMockPriceHistory,
+  products: [...verticalMockProducts, ...parserMockProducts],
+  variants: [...verticalMockVariants, ...parserMockVariants],
+  priceHistory: [...verticalMockPriceHistory, ...parserMockPriceHistory],
   quotes: [
     {
       id: 'quote-clinic-entry',

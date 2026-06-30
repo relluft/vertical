@@ -212,6 +212,7 @@ export interface Supplier {
   lastUpdatedAt: string
   updateStatus: CatalogUpdateStatus
   updateNote: string
+  logoUrl?: string
 }
 
 export interface SupplierProduct {
@@ -228,6 +229,7 @@ export interface SupplierProduct {
   availability: string
   lastSeenAt: string
   imageUrl?: string
+  sourceUrl?: string
 }
 
 export interface ProductVariant {

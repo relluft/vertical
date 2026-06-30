@@ -1,4 +1,10 @@
 import {
+  AnimatePresence,
+  motion,
+  useReducedMotion,
+  type Transition,
+} from 'framer-motion'
+import {
   type CSSProperties,
   useCallback,
   useEffect,
@@ -9,6 +15,7 @@ import {
 import {
   Building2,
   CalendarDays,
+  ChevronDown,
   Eye,
   ExternalLink,
   Hash,
@@ -23,7 +30,9 @@ import {
   X,
 } from 'lucide-react'
 import { KpOfferTableEditor } from '../components/KpOfferTableEditor'
+import { ZoomableImage } from '../components/ZoomableImage'
 import { useDemo } from '../context/DemoContext'
+import { createDemoKpHistoryEntries, type KpHistoryEntry } from '../data/kpHistoryData'
 import { createEmptyOfferTable, recalculateOfferTable } from '../data/demoData'
 import { loadCrmState, saveCrmState, upsertQuoteFromOfferTable } from '../crm/demoStore'
 import { downloadKpDoc, openSavedKpDoc, type KpDocumentProgress, type SavedKpDocument } from '../lib/kpDocument'
@@ -35,7 +44,7 @@ import {
   kpVatRate,
   kpValidityDays,
 } from '../lib/kpFormatting'
-import { kpPriceRevision } from '../lib/kpPricing'
+import { calculateKpOperatorPricing, kpPriceRevision } from '../lib/kpPricing'
 import { resolveVerticalProductUrl } from '../lib/verticalProducts'
 import type { CrmState, ProductVariant, Supplier, SupplierProduct } from '../crm/types'
 import type { DemoOfferTable, DemoOfferTableItem } from '../types/demo'
@@ -43,16 +52,6 @@ import type { DemoOfferTable, DemoOfferTableItem } from '../types/demo'
 type KpView = 'home' | 'work' | 'history' | 'settings'
 type HistoryMode = 'push' | 'replace'
 type ConstructorWorkspaceMode = 'inline' | 'modal'
-
-interface KpHistoryEntry {
-  id: string
-  title?: string
-  number: string
-  date: string
-  customer: string
-  total: number
-  source: string
-}
 
 interface DownloadToast {
   title: string
@@ -71,8 +70,72 @@ interface CatalogOption {
   supplier: Supplier
 }
 
+type CatalogAvailabilityFilter = 'all' | 'available' | 'request'
+type CatalogPriceSort = 'default' | 'asc' | 'desc'
+
+interface CatalogFamily {
+  id: string
+  label: string
+  groupable: boolean
+}
+
+interface CatalogDisplayGroup {
+  id: string
+  family: CatalogFamily
+  label: string
+  options: CatalogOption[]
+  isGrouped: boolean
+  minPrice: number
+  maxPrice: number
+  suppliers: string[]
+}
+
+const catalogFamilies: CatalogFamily[] = [
+  { id: 'all', label: 'Все товары', groupable: false },
+  { id: 'tile', label: 'Тактильная плитка', groupable: true },
+  { id: 'indicators', label: 'Индикаторы и направляющие', groupable: true },
+  { id: 'antislip', label: 'Профили и ленты против скольжения', groupable: true },
+  { id: 'call', label: 'Кнопки и системы вызова', groupable: true },
+  { id: 'signs', label: 'Таблички, знаки, пиктограммы', groupable: true },
+  { id: 'mnemoschemes', label: 'Мнемосхемы', groupable: true },
+  { id: 'ramps', label: 'Пандусы, поручни, подъемники', groupable: false },
+  { id: 'electronics', label: 'Звук, индукция, табло', groupable: false },
+  { id: 'other', label: 'Прочее', groupable: false },
+]
+
+const catalogFamilyFallback = catalogFamilies[catalogFamilies.length - 1]
+const catalogAvailabilityOptions: Array<{ id: CatalogAvailabilityFilter; label: string }> = [
+  { id: 'all', label: 'Любое' },
+  { id: 'available', label: 'В наличии' },
+  { id: 'request', label: 'По запросу' },
+]
+const catalogPriceSortOptions: Array<{ id: CatalogPriceSort; label: string }> = [
+  { id: 'default', label: 'Как в каталоге' },
+  { id: 'asc', label: 'Дешевле' },
+  { id: 'desc', label: 'Дороже' },
+]
+const supplierLogoUrlsByCode: Record<string, string> = {
+  vertical: '/mock/supplier-logos/vertical.jpg',
+  invakor: '/mock/supplier-logos/invakor.png',
+  'istok-audio': '/mock/supplier-logos/istok-audio.webp',
+  safetystep: '/mock/supplier-logos/safetystep.jpg',
+  nepaday: '/mock/supplier-logos/nepaday.png',
+}
+const supplierLogoUrlsById: Record<string, string> = {
+  'sup-vertical': '/mock/supplier-logos/vertical.jpg',
+  'sup-invakor': '/mock/supplier-logos/invakor.png',
+  'sup-istok-audio': '/mock/supplier-logos/istok-audio.webp',
+  'sup-safetystep': '/mock/supplier-logos/safetystep.jpg',
+  'sup-nepaday': '/mock/supplier-logos/nepaday.png',
+}
+
 const historyStorageKey = 'uchet-system-kp-history-v1'
 const settingsStorageKey = 'uchet-system-kp-settings-v1'
+const maxKpHistoryEntries = 24
+const percentFormatter = new Intl.NumberFormat('ru-RU', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+})
 
 interface KpEditorSettings {
   numberSeries: string
@@ -144,6 +207,15 @@ function formatDateLabel(value: string) {
   return `${day}.${month}.${year}`
 }
 
+function formatItemsCount(value?: number) {
+  const count = Math.max(0, Math.round(value ?? 0))
+  const mod10 = count % 10
+  const mod100 = count % 100
+  const noun = mod10 === 1 && mod100 !== 11 ? 'позиция' : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? 'позиции' : 'позиций'
+
+  return `${count} ${noun}`
+}
+
 function normalizeText(value: string, fallback: string) {
   const trimmed = value.trim()
   return trimmed || fallback
@@ -187,8 +259,11 @@ function roundMoneyValue(value: number) {
   return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100
 }
 
+const legacyCatalogSourceGenitive = `${['п', 'а', 'р', 'с', '[её]', 'р'].join('')}а`
+const legacyCatalogVariantLabelPattern = new RegExp(`вариант из (каталога|${legacyCatalogSourceGenitive})`)
+
 function isParserVariantLabel(value?: string) {
-  return value?.toLocaleLowerCase('ru-RU').includes('вариант из парсера') ?? false
+  return value ? legacyCatalogVariantLabelPattern.test(value.toLocaleLowerCase('ru-RU')) : false
 }
 
 function getVariantSizeLabel(variant: ProductVariant) {
@@ -206,8 +281,169 @@ function getVariantDetailLabel(variant: ProductVariant) {
   return [getVariantSizeLabel(variant), variant.material].filter(Boolean).join(' · ')
 }
 
-function getCatalogCategoryLabel(option: CatalogOption) {
-  return option.product.category.trim() || 'Без типа'
+function normalizeCatalogText(value: string) {
+  return value.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е')
+}
+
+function getCatalogOptionText(option: CatalogOption) {
+  return normalizeCatalogText(
+    [
+      option.product.name,
+      option.product.category,
+      option.product.description,
+      option.variant.variantName,
+      option.variant.size,
+      option.variant.color,
+      option.variant.material,
+      option.supplier.name,
+    ].join(' '),
+  )
+}
+
+function getCatalogFamilyById(id: string) {
+  return catalogFamilies.find((family) => family.id === id) ?? catalogFamilyFallback
+}
+
+function getCatalogFamily(option: CatalogOption) {
+  const text = getCatalogOptionText(option)
+
+  if (text.includes('мнемосхем')) {
+    return getCatalogFamilyById('mnemoschemes')
+  }
+
+  if (text.includes('кнопк') || text.includes('вызов') || text.includes('помощник') || text.includes('приемник')) {
+    return getCatalogFamilyById('call')
+  }
+
+  if (
+    text.includes('противосколь') ||
+    text.includes('проступ') ||
+    text.includes('профил') ||
+    text.includes('накладк') ||
+    text.includes('ступен') ||
+    text.includes('самоклеящ')
+  ) {
+    return getCatalogFamilyById('antislip')
+  }
+
+  if (text.includes('плитк')) {
+    return getCatalogFamilyById('tile')
+  }
+
+  if (
+    text.includes('индикатор') ||
+    text.includes('направляющ') ||
+    (text.includes('тактильн') && (text.includes('полос') || text.includes('конус') || text.includes('лента')))
+  ) {
+    return getCatalogFamilyById('indicators')
+  }
+
+  if (text.includes('таблич') || text.includes('пиктограмм') || text.includes('знак')) {
+    return getCatalogFamilyById('signs')
+  }
+
+  if (
+    text.includes('пандус') ||
+    text.includes('рамп') ||
+    text.includes('подъемник') ||
+    text.includes('поруч') ||
+    text.includes('кабин')
+  ) {
+    return getCatalogFamilyById('ramps')
+  }
+
+  if (
+    text.includes('индукц') ||
+    text.includes('звуков') ||
+    text.includes('маяк') ||
+    text.includes('табло') ||
+    text.includes('бегущ')
+  ) {
+    return getCatalogFamilyById('electronics')
+  }
+
+  return catalogFamilyFallback
+}
+
+function getCatalogOptionPrice(option: CatalogOption) {
+  return roundMoneyValue(Math.max(0, option.variant.purchasePrice || option.product.basePurchasePrice || 0))
+}
+
+function formatCatalogPrice(value: number) {
+  return `${formatMoney(value)} ₽`
+}
+
+function formatConstructorPercent(value: number) {
+  return `${percentFormatter.format(Number.isFinite(value) ? value : 0)}%`
+}
+
+function isCatalogOptionAvailable(option: CatalogOption) {
+  const text = normalizeCatalogText(`${option.variant.availability} ${option.product.availability}`)
+
+  return text.includes('в наличии') || text.includes('на складе') || text.includes('достаточно') || text.includes('много')
+}
+
+function getCatalogAvailabilityFilter(option: CatalogOption): CatalogAvailabilityFilter {
+  return isCatalogOptionAvailable(option) ? 'available' : 'request'
+}
+
+function makeCountOptions<T extends string>(
+  allId: T,
+  allLabel: string,
+  count: number,
+  items: Array<{ id: T; label: string; count: number }>,
+) {
+  return [{ id: allId, label: allLabel, count }, ...items]
+}
+
+function getShortUniqueLabels(values: string[], limit = 3) {
+  const seen = new Set<string>()
+  const result: string[] = []
+
+  values.forEach((value) => {
+    const label = value.trim()
+    const key = normalizeCatalogText(label)
+
+    if (!label || label === 'по карточке' || seen.has(key)) {
+      return
+    }
+
+    seen.add(key)
+    result.push(label)
+  })
+
+  return result.slice(0, limit)
+}
+
+function getCatalogGroupMeta(group: CatalogDisplayGroup) {
+  const parts = [`${group.options.length} ${group.options.length === 1 ? 'позиция' : 'вариантов'}`, group.suppliers.join(', ')]
+
+  return parts.join(' · ')
+}
+
+function getCatalogOptionVariantMeta(option: CatalogOption) {
+  return [
+    getCatalogVariantMeta(option),
+    option.variant.color && option.variant.color !== 'по карточке' ? option.variant.color : '',
+    option.variant.material && option.variant.material !== 'по карточке' ? option.variant.material : '',
+    formatCatalogPrice(getCatalogOptionPrice(option)),
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function getSupplierSections(options: CatalogOption[]) {
+  const sections = new Map<string, CatalogOption[]>()
+
+  options.forEach((option) => {
+    const current = sections.get(option.supplier.id) ?? []
+    current.push(option)
+    sections.set(option.supplier.id, current)
+  })
+
+  return [...sections.values()]
+    .map((items) => ({ supplier: items[0].supplier, options: items }))
+    .sort((first, second) => first.supplier.name.localeCompare(second.supplier.name, 'ru-RU'))
 }
 
 function makeCatalogOfferItem(
@@ -226,10 +462,12 @@ function makeCatalogOfferItem(
     option.variant.color,
     option.variant.material,
   ].filter(Boolean)
-  const productUrl = resolveVerticalProductUrl({
-    description: option.product.name,
-    productCode: option.variant.sku || option.product.sku,
-  })
+  const productUrl =
+    option.product.sourceUrl ||
+    resolveVerticalProductUrl({
+      description: option.product.name,
+      productCode: option.variant.sku || option.product.sku,
+    })
 
   return {
     id: `offer-catalog-${option.variant.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -264,10 +502,17 @@ function appendOfferItem(offerTable: DemoOfferTable | null, item: DemoOfferTable
 }
 
 function makeCatalogProductUrl(option: CatalogOption) {
-  return resolveVerticalProductUrl({
-    description: option.product.name,
-    productCode: option.variant.sku || option.product.sku,
-  })
+  return (
+    option.product.sourceUrl ||
+    resolveVerticalProductUrl({
+      description: option.product.name,
+      productCode: option.variant.sku || option.product.sku,
+    })
+  )
+}
+
+function getSupplierLogoUrl(supplier: Supplier) {
+  return supplier.logoUrl || supplierLogoUrlsByCode[supplier.code] || supplierLogoUrlsById[supplier.id] || ''
 }
 
 function sanitizeKpSettings(value: unknown): KpEditorSettings {
@@ -320,22 +565,73 @@ function SettingsToggle({ title, description, checked, onChange }: SettingsToggl
   )
 }
 
-function isHistoryEntry(value: unknown): value is KpHistoryEntry {
+function isOfferTable(value: unknown): value is DemoOfferTable {
   if (!value || typeof value !== 'object') {
     return false
   }
 
-  const item = value as Partial<KpHistoryEntry>
+  const table = value as Partial<DemoOfferTable>
 
-  return (
-    typeof item.id === 'string' &&
-    (item.title === undefined || typeof item.title === 'string') &&
-    typeof item.number === 'string' &&
-    typeof item.date === 'string' &&
-    typeof item.customer === 'string' &&
-    typeof item.total === 'number' &&
-    typeof item.source === 'string'
-  )
+  return Array.isArray(table.items) && Array.isArray(table.totals)
+}
+
+function cloneOfferTable(offerTable: DemoOfferTable | null | undefined): DemoOfferTable | null {
+  if (!offerTable) {
+    return null
+  }
+
+  return {
+    items: offerTable.items.map((item) => ({ ...item })),
+    totals: offerTable.totals.map((total) => ({ ...total })),
+  }
+}
+
+function sanitizeHistoryEntry(value: unknown): KpHistoryEntry | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const item = value as Partial<KpHistoryEntry>
+  const { customer, date, id, number, source, title, total } = item
+
+  if (
+    typeof id !== 'string' ||
+    (title !== undefined && typeof title !== 'string') ||
+    typeof number !== 'string' ||
+    typeof date !== 'string' ||
+    typeof customer !== 'string' ||
+    typeof total !== 'number' ||
+    typeof source !== 'string'
+  ) {
+    return null
+  }
+
+  const offerTable = isOfferTable(item.offerTable) ? cloneOfferTable(item.offerTable) : null
+
+  return {
+    id,
+    title,
+    number,
+    date,
+    customer,
+    total,
+    source,
+    status: typeof item.status === 'string' ? item.status : undefined,
+    objectName: typeof item.objectName === 'string' ? item.objectName : undefined,
+    itemsCount: Number.isFinite(item.itemsCount) ? Number(item.itemsCount) : offerTable?.items.length ?? 0,
+    recipientName: typeof item.recipientName === 'string' ? item.recipientName : undefined,
+    validUntil: typeof item.validUntil === 'string' ? item.validUntil : undefined,
+    validityDays: Number.isFinite(item.validityDays) ? Number(item.validityDays) : undefined,
+    vatRate: Number.isFinite(item.vatRate) ? Number(item.vatRate) : undefined,
+    offerTable,
+  }
+}
+
+function mergeKpHistoryEntries(savedEntries: KpHistoryEntry[], demoEntries: KpHistoryEntry[]) {
+  const demoIds = new Set(demoEntries.map((entry) => entry.id))
+  const savedWithoutStaleDemo = savedEntries.filter((entry) => !demoIds.has(entry.id) && entry.id !== 'history-seed')
+
+  return [...savedWithoutStaleDemo, ...demoEntries]
 }
 
 export function KpEditorPage({ projectId = null, darkTheme = false, embedded = false }: KpEditorPageProps) {
@@ -348,6 +644,7 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
     addOfferItem,
     deleteOfferItem,
   } = useDemo()
+  const reduceMotion = useReducedMotion()
   const [activeView, setActiveView] = useState<KpView>(() => (projectId ? 'work' : getInitialView()))
   const [isGeneratingWord, setIsGeneratingWord] = useState(false)
   const [isOpeningWord, setIsOpeningWord] = useState(false)
@@ -358,8 +655,12 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
   const [settings, setSettings] = useState<KpEditorSettings>(loadKpSettings)
   const [crmState, setCrmState] = useState<CrmState>(loadCrmState)
   const [catalogSearch, setCatalogSearch] = useState('')
-  const [selectedCatalogCategory, setSelectedCatalogCategory] = useState('all')
+  const [selectedCatalogFamily, setSelectedCatalogFamily] = useState('all')
+  const [selectedCatalogSupplier, setSelectedCatalogSupplier] = useState('all')
+  const [selectedCatalogAvailability, setSelectedCatalogAvailability] = useState<CatalogAvailabilityFilter>('all')
+  const [catalogPriceSort, setCatalogPriceSort] = useState<CatalogPriceSort>('default')
   const [isCatalogFiltersOpen, setIsCatalogFiltersOpen] = useState(false)
+  const [expandedCatalogGroups, setExpandedCatalogGroups] = useState<Record<string, boolean>>({})
   const [selectedVariantId, setSelectedVariantId] = useState('')
   const [constructorQty, setConstructorQty] = useState(1)
   const [constructorSalePrice, setConstructorSalePrice] = useState('')
@@ -386,32 +687,39 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
     updateConstructorSalePrice('')
   }, [updateConstructorSalePrice])
   const [historyEntries, setHistoryEntries] = useState<KpHistoryEntry[]>(() => {
+    const demoEntries = createDemoKpHistoryEntries(crmState)
+
     if (typeof window !== 'undefined') {
       try {
         const cached = window.localStorage.getItem(historyStorageKey)
         const parsed = cached ? JSON.parse(cached) : null
 
         if (Array.isArray(parsed)) {
-          return parsed.filter(isHistoryEntry)
+          return mergeKpHistoryEntries(
+            parsed.flatMap((item) => {
+              const entry = sanitizeHistoryEntry(item)
+
+              return entry ? [entry] : []
+            }),
+            demoEntries,
+          )
         }
       } catch {
         // Ignore broken local history and fall back to the current demo document.
       }
     }
 
-    return total
-      ? [
-          {
-            id: 'history-seed',
-            number: normalizeText(exportForm.documentNumber, '1-В'),
-            date: exportForm.documentDate,
-            customer: normalizeText(exportForm.counterpartyName, 'Заказчик не указан'),
-            total,
-            source: 'Текущий документ',
-          },
-        ]
-      : []
+    return mergeKpHistoryEntries([], demoEntries)
   })
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false)
+  const [selectedHistoryEntryId, setSelectedHistoryEntryId] = useState<string | null>(() => historyEntries[0]?.id ?? null)
+  const selectedHistoryEntry = useMemo(() => {
+    if (!historyEntries.length) {
+      return null
+    }
+
+    return historyEntries.find((entry) => entry.id === selectedHistoryEntryId) ?? historyEntries[0]
+  }, [historyEntries, selectedHistoryEntryId])
   const settingsPreviewDate = settings.autoUseToday ? getTodayIso() : exportForm.documentDate
   const settingsPreviewNumber = settings.autoNumbering
     ? makeNextDocumentNumber(settings)
@@ -448,26 +756,57 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
       })
       .filter((item): item is CatalogOption => Boolean(item))
   }, [crmState.products, crmState.suppliers, crmState.variants])
-  const catalogCategoryOptions = useMemo(() => {
+  const catalogFamilyOptions = useMemo(() => {
     const counts = new Map<string, number>()
 
     catalogOptions.forEach((option) => {
-      const category = getCatalogCategoryLabel(option)
-      counts.set(category, (counts.get(category) ?? 0) + 1)
+      const family = getCatalogFamily(option)
+      counts.set(family.id, (counts.get(family.id) ?? 0) + 1)
     })
 
-    const typedCategories = [...counts.entries()]
-      .map(([id, count]) => ({ id, label: id, count }))
-      .sort((first, second) => first.label.localeCompare(second.label, 'ru-RU'))
+    return makeCountOptions(
+      'all',
+      'Все товары',
+      catalogOptions.length,
+      catalogFamilies
+        .filter((family) => family.id !== 'all' && (counts.get(family.id) ?? 0) > 0)
+        .map((family) => ({ id: family.id, label: family.label, count: counts.get(family.id) ?? 0 })),
+    )
+  }, [catalogOptions])
+  const catalogSupplierOptions = useMemo(() => {
+    const counts = new Map<string, { label: string; count: number }>()
 
-    return [{ id: 'all', label: 'Все типы', count: catalogOptions.length }, ...typedCategories]
+    catalogOptions.forEach((option) => {
+      const current = counts.get(option.supplier.id)
+      counts.set(option.supplier.id, {
+        label: option.supplier.name,
+        count: (current?.count ?? 0) + 1,
+      })
+    })
+
+    return makeCountOptions(
+      'all',
+      'Все поставщики',
+      catalogOptions.length,
+      [...counts.entries()]
+        .map(([id, item]) => ({ id, label: item.label, count: item.count }))
+        .sort((first, second) => first.label.localeCompare(second.label, 'ru-RU')),
+    )
   }, [catalogOptions])
   const filteredCatalogOptions = useMemo(() => {
     const normalizedSearch = catalogSearch.toLocaleLowerCase('ru-RU').trim()
 
-    return catalogOptions
+    const options = catalogOptions
       .filter((option) => {
-        if (selectedCatalogCategory !== 'all' && getCatalogCategoryLabel(option) !== selectedCatalogCategory) {
+        if (selectedCatalogFamily !== 'all' && getCatalogFamily(option).id !== selectedCatalogFamily) {
+          return false
+        }
+
+        if (selectedCatalogSupplier !== 'all' && option.supplier.id !== selectedCatalogSupplier) {
+          return false
+        }
+
+        if (selectedCatalogAvailability !== 'all' && getCatalogAvailabilityFilter(option) !== selectedCatalogAvailability) {
           return false
         }
 
@@ -483,16 +822,109 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
           option.variant.variantName,
           option.variant.size,
           option.variant.color,
+          option.variant.material,
           option.supplier.name,
         ]
           .join(' ')
           .toLocaleLowerCase('ru-RU')
           .includes(normalizedSearch)
       })
-  }, [catalogOptions, catalogSearch, selectedCatalogCategory])
+
+    if (catalogPriceSort === 'asc') {
+      return [...options].sort((first, second) => getCatalogOptionPrice(first) - getCatalogOptionPrice(second))
+    }
+
+    if (catalogPriceSort === 'desc') {
+      return [...options].sort((first, second) => getCatalogOptionPrice(second) - getCatalogOptionPrice(first))
+    }
+
+    return options
+  }, [catalogOptions, catalogPriceSort, catalogSearch, selectedCatalogAvailability, selectedCatalogFamily, selectedCatalogSupplier])
+  const catalogDisplayGroups = useMemo<CatalogDisplayGroup[]>(() => {
+    const familyCounts = new Map<string, number>()
+
+    filteredCatalogOptions.forEach((option) => {
+      const family = getCatalogFamily(option)
+      familyCounts.set(family.id, (familyCounts.get(family.id) ?? 0) + 1)
+    })
+
+    const groups = new Map<string, CatalogDisplayGroup>()
+
+    filteredCatalogOptions.forEach((option) => {
+      const family = getCatalogFamily(option)
+      const isGrouped = family.groupable && (familyCounts.get(family.id) ?? 0) >= 4
+      const id = isGrouped ? `family:${family.id}` : `option:${option.variant.id}`
+      const price = getCatalogOptionPrice(option)
+      const current = groups.get(id)
+
+      if (!current) {
+        groups.set(id, {
+          id,
+          family,
+          label: isGrouped ? family.label : option.product.name,
+          options: [option],
+          isGrouped,
+          minPrice: price,
+          maxPrice: price,
+          suppliers: [option.supplier.name],
+        })
+        return
+      }
+
+      current.options.push(option)
+      current.minPrice = Math.min(current.minPrice, price)
+      current.maxPrice = Math.max(current.maxPrice, price)
+      current.suppliers = getShortUniqueLabels([...current.suppliers, option.supplier.name], 4)
+    })
+
+    return [...groups.values()]
+  }, [filteredCatalogOptions])
+  const activeCatalogFilterCount = [
+    selectedCatalogFamily !== 'all',
+    selectedCatalogSupplier !== 'all',
+    selectedCatalogAvailability !== 'all',
+    catalogPriceSort !== 'default',
+  ].filter(Boolean).length
+  const selectedCatalogFamilyLabel =
+    catalogFamilyOptions.find((item) => item.id === selectedCatalogFamily)?.label ?? 'Все товары'
+  const selectedCatalogSupplierLabel =
+    catalogSupplierOptions.find((item) => item.id === selectedCatalogSupplier)?.label ?? 'Все поставщики'
+  const catalogFilterSummary = activeCatalogFilterCount
+    ? `${filteredCatalogOptions.length} из ${catalogOptions.length} · ${[
+        selectedCatalogFamily !== 'all' ? selectedCatalogFamilyLabel : '',
+        selectedCatalogSupplier !== 'all' ? selectedCatalogSupplierLabel : '',
+        selectedCatalogAvailability !== 'all'
+          ? catalogAvailabilityOptions.find((item) => item.id === selectedCatalogAvailability)?.label
+          : '',
+        catalogPriceSort !== 'default' ? catalogPriceSortOptions.find((item) => item.id === catalogPriceSort)?.label : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')}`
+    : `${catalogOptions.length} товаров`
   const selectedCatalogOption =
     filteredCatalogOptions.find((option) => option.variant.id === selectedVariantId) ?? filteredCatalogOptions[0] ?? null
   const selectedCatalogProductUrl = selectedCatalogOption ? makeCatalogProductUrl(selectedCatalogOption) : null
+  const selectedSupplierLogoUrl = selectedCatalogOption ? getSupplierLogoUrl(selectedCatalogOption.supplier) : ''
+  const constructorPricingPreview = useMemo(() => {
+    if (!selectedCatalogOption) {
+      return null
+    }
+
+    const saleUnitPrice = parseMoneyInput(constructorSalePrice, 0)
+    const hasSaleUnitPrice = constructorSalePrice.trim().length > 0 && saleUnitPrice > 0
+
+    return calculateKpOperatorPricing({
+      quantity: constructorQty,
+      purchaseUnitPrice: hasSaleUnitPrice ? getCatalogOptionPrice(selectedCatalogOption) : 0,
+      saleUnitPrice: hasSaleUnitPrice ? saleUnitPrice : 0,
+    })
+  }, [constructorQty, constructorSalePrice, selectedCatalogOption])
+  const viewTransition: Transition = reduceMotion
+    ? { duration: 0.01 }
+    : { duration: 0.14, ease: [0.22, 1, 0.36, 1] }
+  const viewInitial = reduceMotion ? { opacity: 0 } : { opacity: 0, y: 7, scale: 0.998 }
+  const viewAnimate = reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }
+  const viewExit = reduceMotion ? { opacity: 0 } : { opacity: 0, y: -5, scale: 0.998 }
 
   const writeNavigationState = useCallback((view: KpView, mode: HistoryMode) => {
     if (typeof window === 'undefined') {
@@ -586,12 +1018,25 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
       customer: normalizeText(exportForm.counterpartyName, 'Заказчик не указан'),
       total,
       source,
+      status: 'Сохранено',
+      objectName: normalizeText(exportForm.objectAddress, projectObject?.name ?? 'объект не указан'),
+      itemsCount: draft.offerTable?.items.length ?? 0,
+      recipientName: normalizeText(exportForm.counterpartyName, 'Заказчик не указан'),
+      validUntil: addCalendarDays(exportForm.documentDate, settings.validityDays),
+      validityDays: settings.validityDays,
+      vatRate: settings.vatRate,
+      offerTable: cloneOfferTable(draft.offerTable),
     }),
     [
+      draft.offerTable,
       exportForm.counterpartyName,
       exportForm.documentDate,
       exportForm.documentNumber,
       exportForm.documentTitle,
+      exportForm.objectAddress,
+      projectObject?.name,
+      settings.validityDays,
+      settings.vatRate,
       total,
     ],
   )
@@ -614,16 +1059,38 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
               item.customer === entry.customer
             ),
         ),
-      ].slice(0, 12))
+      ].slice(0, maxKpHistoryEntries))
     },
     [createHistoryEntry, settings.autoSaveHistory],
   )
+
+  const openHistoryModal = useCallback(
+    (entryId?: string) => {
+      setSelectedHistoryEntryId(entryId ?? historyEntries[0]?.id ?? null)
+      setIsHistoryModalOpen(true)
+    },
+    [historyEntries],
+  )
+
+  const closeHistoryModal = useCallback(() => {
+    setIsHistoryModalOpen(false)
+  }, [])
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(historyStorageKey, JSON.stringify(historyEntries))
     }
   }, [historyEntries])
+
+  useEffect(() => {
+    const hasSelectedEntry = selectedHistoryEntryId
+      ? historyEntries.some((entry) => entry.id === selectedHistoryEntryId)
+      : false
+
+    if (!hasSelectedEntry && historyEntries[0]) {
+      setSelectedHistoryEntryId(historyEntries[0].id)
+    }
+  }, [historyEntries, selectedHistoryEntryId])
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -661,6 +1128,27 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
       window.removeEventListener('keydown', handleKeyDown)
     }
   }, [isConstructorModalOpen])
+
+  useEffect(() => {
+    if (!isHistoryModalOpen || typeof window === 'undefined') {
+      return undefined
+    }
+
+    const previousOverflow = document.body.style.overflow
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeHistoryModal()
+      }
+    }
+
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [closeHistoryModal, isHistoryModalOpen])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -830,6 +1318,31 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
     }
   }
 
+  const handleSelectCatalogVariant = (variantId: string) => {
+    if (selectedVariantId !== variantId) {
+      resetConstructorSalePrice()
+    }
+    setSelectedVariantId(variantId)
+  }
+
+  const handleResetCatalogFilters = () => {
+    setCatalogSearch('')
+    setSelectedCatalogFamily('all')
+    setSelectedCatalogSupplier('all')
+    setSelectedCatalogAvailability('all')
+    setCatalogPriceSort('default')
+    setExpandedCatalogGroups({})
+    setSelectedVariantId('')
+    resetConstructorSalePrice()
+  }
+
+  const handleToggleCatalogGroup = (groupId: string, isExpanded: boolean) => {
+    setExpandedCatalogGroups((current) => ({
+      ...current,
+      [groupId]: !(current[groupId] ?? isExpanded),
+    }))
+  }
+
   const handleAddCatalogProduct = () => {
     if (!selectedCatalogOption) {
       return
@@ -902,7 +1415,7 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
                 key={entry.id}
                 type="button"
                 className="history-row"
-                onClick={() => navigateToView('work')}
+                onClick={() => openHistoryModal(entry.id)}
               >
                 <span className="history-number">
                   <strong>{entryTitle}</strong>
@@ -911,7 +1424,7 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
                 <span className="history-customer">{entry.customer}</span>
                 <span className="history-date">{formatDateLabel(entry.date)}</span>
                 <span className="history-total">{formatMoney(entry.total)}</span>
-                <span className="history-source">{entry.source}</span>
+                <span className="history-source">{entry.status ?? entry.source}</span>
               </button>
             )
           })}
@@ -927,6 +1440,160 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
         </div>
       )}
     </section>
+  )
+
+  const renderHistoryModal = () => (
+    <AnimatePresence>
+      {isHistoryModalOpen ? (
+        <motion.div
+          className="kp-history-modal-backdrop"
+          role="presentation"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeHistoryModal()
+            }
+          }}
+        >
+          <motion.section
+            className="kp-history-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="История коммерческих предложений"
+            initial={{ opacity: 0, y: 18, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 18, scale: 0.98 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+          >
+            <header className="kp-history-modal-head">
+              <div>
+                <span>История КП</span>
+                <h2>Прошлые коммерческие предложения</h2>
+              </div>
+              <button
+                type="button"
+                className="kp-constructor-modal-close"
+                onClick={closeHistoryModal}
+                aria-label="Закрыть историю КП"
+                title="Закрыть"
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="kp-history-modal-body">
+              <section className="kp-history-table-panel" aria-label="Таблица коммерческих предложений">
+                <div className="kp-history-table-scroll">
+                  <table className="kp-history-table">
+                    <thead>
+                      <tr>
+                        <th>Дата</th>
+                        <th>№ КП</th>
+                        <th>Название</th>
+                        <th>Контрагент</th>
+                        <th>Сумма</th>
+                        <th>Статус</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyEntries.map((entry) => {
+                        const entryTitle = normalizeText(entry.title ?? '', entry.number)
+                        const isSelected = selectedHistoryEntry?.id === entry.id
+
+                        return (
+                          <tr
+                            key={entry.id}
+                            className={isSelected ? 'is-selected' : undefined}
+                            tabIndex={0}
+                            aria-selected={isSelected}
+                            onClick={() => setSelectedHistoryEntryId(entry.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                setSelectedHistoryEntryId(entry.id)
+                              }
+                            }}
+                          >
+                            <td>{formatDateLabel(entry.date)}</td>
+                            <td>
+                              <strong>{entry.number}</strong>
+                            </td>
+                            <td>
+                              <span>{entryTitle}</span>
+                              <small>{entry.source}</small>
+                            </td>
+                            <td>{entry.customer}</td>
+                            <td className="kp-history-table-money">
+                              <strong>{formatMoney(entry.total)}</strong>
+                              <small>{formatItemsCount(entry.itemsCount)}</small>
+                            </td>
+                            <td>
+                              <span className="kp-history-status-pill">{entry.status ?? 'Сохранено'}</span>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="kp-history-preview-panel" aria-label="Предпросмотр коммерческого предложения">
+                {selectedHistoryEntry ? (
+                  <>
+                    <div className="kp-history-preview-head">
+                      <div>
+                        <span>Предпросмотр</span>
+                        <h3>{normalizeText(selectedHistoryEntry.title ?? '', selectedHistoryEntry.number)}</h3>
+                        <p>
+                          КП {selectedHistoryEntry.number} от {formatDateLabel(selectedHistoryEntry.date)} · {selectedHistoryEntry.customer}
+                        </p>
+                      </div>
+                      <div className="kp-history-preview-total">
+                        <span>{formatItemsCount(selectedHistoryEntry.itemsCount)}</span>
+                        <strong>{formatMoney(selectedHistoryEntry.total)}</strong>
+                      </div>
+                    </div>
+
+                    {selectedHistoryEntry.offerTable ? (
+                      <div className="kp-history-preview-scroll">
+                        <KpOfferTableEditor
+                          offerTable={selectedHistoryEntry.offerTable}
+                          fields={[]}
+                          cellAnnotations={{}}
+                          editable={false}
+                          documentDate={selectedHistoryEntry.date}
+                          documentNumber={selectedHistoryEntry.number}
+                          recipientName={selectedHistoryEntry.recipientName ?? selectedHistoryEntry.customer}
+                          validityDays={selectedHistoryEntry.validityDays ?? settings.validityDays}
+                          vatRate={selectedHistoryEntry.vatRate ?? settings.vatRate}
+                          showOperatorColumns={false}
+                          maxWorkspaceScale={1.18}
+                        />
+                      </div>
+                    ) : (
+                      <div className="kp-history-preview-empty">
+                        <History size={22} />
+                        <strong>Предпросмотр недоступен</strong>
+                        <span>В этой записи сохранены только реквизиты КП.</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="kp-history-preview-empty">
+                    <History size={22} />
+                    <strong>История пока пустая</strong>
+                    <span>Сохраненные КП появятся в этом окне.</span>
+                  </div>
+                )}
+              </section>
+            </div>
+          </motion.section>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
   )
 
   const renderSettings = () => (
@@ -1062,7 +1729,7 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
             <div className="settings-toggle-list">
               <SettingsToggle
                 title="Показывать правые служебные колонки"
-                description="Цена закупки, сумма закупки, наценка, процент и ссылки на Вертикаль останутся рядом с таблицей."
+                description="Цена закупки, сумма закупки, наценка, процент и ссылки на карточки поставщиков останутся рядом с таблицей."
                 checked={settings.showOperatorColumns}
                 onChange={(checked) => updateSetting('showOperatorColumns', checked)}
               />
@@ -1175,6 +1842,15 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
       >
         <Eye size={15} aria-hidden="true" />
         <span>{isOpeningWord ? 'Открытие...' : 'Открыть'}</span>
+      </button>
+      <button
+        type="button"
+        className="icon-button secondary"
+        onClick={() => openHistoryModal()}
+        title="Показать прошлые коммерческие предложения"
+      >
+        <History size={15} aria-hidden="true" />
+        <span>История КП</span>
       </button>
     </div>
   )
@@ -1292,53 +1968,228 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
                 <SlidersHorizontal size={14} />
                 <span>Фильтры</span>
               </button>
-              <span>{catalogCategoryOptions.find((item) => item.id === selectedCatalogCategory)?.label ?? 'Все типы'}</span>
+              <span>{catalogFilterSummary}</span>
             </div>
 
             {isCatalogFiltersOpen ? (
-              <div className="kp-catalog-filter-list" aria-label="Типы товаров">
-                {catalogCategoryOptions.map((category) => (
-                  <button
-                    key={category.id}
-                    type="button"
-                    className={category.id === selectedCatalogCategory ? 'is-active' : undefined}
-                    onClick={() => {
-                      setSelectedCatalogCategory(category.id)
-                      resetConstructorSalePrice()
-                    }}
-                  >
-                    <span>{category.label}</span>
-                    <small>{category.count}</small>
+              <div className="kp-catalog-filter-panel" aria-label="Фильтры каталога">
+                <section>
+                  <div className="kp-catalog-filter-heading">
+                    <span>Тип</span>
+                    <small>{selectedCatalogFamilyLabel}</small>
+                  </div>
+                  <div className="kp-catalog-chip-row">
+                    {catalogFamilyOptions.map((family) => (
+                      <button
+                        key={family.id}
+                        type="button"
+                        className={family.id === selectedCatalogFamily ? 'is-active' : undefined}
+                        onClick={() => {
+                          setSelectedCatalogFamily(family.id)
+                          setSelectedVariantId('')
+                          resetConstructorSalePrice()
+                        }}
+                      >
+                        <span>{family.label}</span>
+                        <small>{family.count}</small>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section>
+                  <div className="kp-catalog-filter-heading">
+                    <span>Поставщик</span>
+                    <small>{selectedCatalogSupplierLabel}</small>
+                  </div>
+                  <div className="kp-catalog-chip-row">
+                    {catalogSupplierOptions.map((supplier) => (
+                      <button
+                        key={supplier.id}
+                        type="button"
+                        className={supplier.id === selectedCatalogSupplier ? 'is-active' : undefined}
+                        onClick={() => {
+                          setSelectedCatalogSupplier(supplier.id)
+                          setSelectedVariantId('')
+                          resetConstructorSalePrice()
+                        }}
+                      >
+                        <span>{supplier.label}</span>
+                        <small>{supplier.count}</small>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="kp-catalog-filter-grid">
+                  <div>
+                    <div className="kp-catalog-filter-heading">
+                      <span>Наличие</span>
+                    </div>
+                    <div className="kp-catalog-segmented">
+                      {catalogAvailabilityOptions.map((availability) => (
+                        <button
+                          key={availability.id}
+                          type="button"
+                          className={availability.id === selectedCatalogAvailability ? 'is-active' : undefined}
+                          onClick={() => {
+                            setSelectedCatalogAvailability(availability.id)
+                            setSelectedVariantId('')
+                            resetConstructorSalePrice()
+                          }}
+                        >
+                          {availability.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="kp-catalog-filter-heading">
+                      <span>Цена</span>
+                    </div>
+                    <div className="kp-catalog-segmented">
+                      {catalogPriceSortOptions.map((sortOption) => (
+                        <button
+                          key={sortOption.id}
+                          type="button"
+                          className={sortOption.id === catalogPriceSort ? 'is-active' : undefined}
+                          onClick={() => {
+                            setCatalogPriceSort(sortOption.id)
+                            setSelectedVariantId('')
+                            resetConstructorSalePrice()
+                          }}
+                        >
+                          {sortOption.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+
+                {activeCatalogFilterCount > 0 || catalogSearch ? (
+                  <button type="button" className="kp-catalog-filter-reset" onClick={handleResetCatalogFilters}>
+                    <X size={13} />
+                    <span>Сбросить</span>
                   </button>
-                ))}
+                ) : null}
               </div>
             ) : null}
 
             <div className="kp-catalog-list" role="listbox" aria-label="Товары каталога">
-              {filteredCatalogOptions.map((option, index) => {
-                const active = selectedCatalogOption?.variant.id === option.variant.id
-                const variantMeta = getCatalogVariantMeta(option)
+              {catalogDisplayGroups.length ? (
+                catalogDisplayGroups.map((group, index) => {
+                  const containsSelected = group.options.some((option) => selectedCatalogOption?.variant.id === option.variant.id)
+                  const expandedByDefault = selectedCatalogFamily === group.family.id || containsSelected
+                  const expanded = group.isGrouped ? expandedCatalogGroups[group.id] ?? expandedByDefault : false
 
-                return (
-                  <button
-                    key={option.variant.id}
-                    type="button"
-                    className={active ? 'is-active' : undefined}
-                    onClick={() => {
-                      if (selectedVariantId !== option.variant.id) {
-                        resetConstructorSalePrice()
-                      }
-                      setSelectedVariantId(option.variant.id)
-                    }}
-                  >
-                    <span className="kp-catalog-item-number">{index + 1}</span>
-                    <span className="kp-catalog-item-copy">
-                      <strong>{option.product.name}</strong>
-                      <span>{[variantMeta, option.supplier.name].filter(Boolean).join(' · ')}</span>
-                    </span>
-                  </button>
-                )
-              })}
+                  if (!group.isGrouped) {
+                    const option = group.options[0]
+                    const optionActive = selectedCatalogOption?.variant.id === option.variant.id
+
+                    return (
+                      <button
+                        key={group.id}
+                        type="button"
+                        className={`kp-catalog-item-button ${optionActive ? 'is-active' : ''}`.trim()}
+                        onClick={() => handleSelectCatalogVariant(option.variant.id)}
+                      >
+                        <span className="kp-catalog-item-number">{index + 1}</span>
+                        <span className="kp-catalog-item-copy">
+                          <strong>{option.product.name}</strong>
+                          <span>{[getCatalogVariantMeta(option), option.supplier.name].filter(Boolean).join(' · ')}</span>
+                        </span>
+                      </button>
+                    )
+                  }
+
+                  return (
+                    <article key={group.id} className={`kp-catalog-group ${expanded ? 'is-expanded' : ''}`.trim()}>
+                      <button
+                        type="button"
+                        className="kp-catalog-group-toggle"
+                        aria-expanded={expanded}
+                        onClick={() => handleToggleCatalogGroup(group.id, expanded)}
+                      >
+                        <span className="kp-catalog-item-number">{index + 1}</span>
+                        <span className="kp-catalog-item-copy">
+                          <strong>{group.label}</strong>
+                          <span>{getCatalogGroupMeta(group)}</span>
+                        </span>
+                        <ChevronDown className={expanded ? 'is-open' : undefined} size={16} />
+                      </button>
+
+                      <AnimatePresence initial={false}>
+                        {expanded ? (
+                          <motion.div
+                            key="variants"
+                            className="kp-catalog-variant-motion"
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{
+                              height: { duration: 0.42, ease: [0.16, 1, 0.3, 1] },
+                              opacity: { duration: 0.28, ease: 'easeOut' },
+                            }}
+                          >
+                            <div className="kp-catalog-variant-list">
+                              {getSupplierSections(group.options).map((section) => {
+                                const supplierLogoUrl = getSupplierLogoUrl(section.supplier)
+
+                                return (
+                                  <div key={`${group.id}-${section.supplier.id}`} className="kp-catalog-supplier-section">
+                                    <div className={`kp-catalog-supplier-heading ${supplierLogoUrl ? 'has-logo' : ''}`.trim()}>
+                                      <span className="kp-catalog-supplier-identity">
+                                        {supplierLogoUrl ? (
+                                          <span className="kp-catalog-supplier-mini-logo">
+                                            <img
+                                              src={supplierLogoUrl}
+                                              alt={`Логотип ${section.supplier.name}`}
+                                              loading="lazy"
+                                            />
+                                          </span>
+                                        ) : null}
+                                        <span className="kp-catalog-supplier-name">{section.supplier.name}</span>
+                                      </span>
+                                      <small>{section.options.length}</small>
+                                    </div>
+                                    {section.options.map((option) => {
+                                      const optionActive = selectedCatalogOption?.variant.id === option.variant.id
+                                      const optionNumber =
+                                        group.options.findIndex((item) => item.variant.id === option.variant.id) + 1
+
+                                      return (
+                                        <button
+                                          key={option.variant.id}
+                                          type="button"
+                                          className={`kp-catalog-variant-button ${optionActive ? 'is-active' : ''}`.trim()}
+                                          onClick={() => handleSelectCatalogVariant(option.variant.id)}
+                                        >
+                                          <span className="kp-catalog-variant-number">{optionNumber}</span>
+                                          <span className="kp-catalog-variant-copy">
+                                            <span className="kp-catalog-variant-title">{option.product.name}</span>
+                                            <span className="kp-catalog-variant-meta">
+                                              {getCatalogOptionVariantMeta(option)}
+                                            </span>
+                                          </span>
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </motion.div>
+                        ) : null}
+                      </AnimatePresence>
+                    </article>
+                  )
+                })
+              ) : (
+                <div className="kp-catalog-empty-list">
+                  <strong>Нет товаров</strong>
+                  <span>Измените фильтры или поисковый запрос.</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1348,7 +2199,7 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
                 <div className="kp-product-title">
                   <div className="kp-product-hero">
                     {selectedCatalogOption.product.imageUrl ? (
-                      <img
+                      <ZoomableImage
                         className="kp-constructor-product-image"
                         src={selectedCatalogOption.product.imageUrl}
                         alt={selectedCatalogOption.product.name}
@@ -1365,11 +2216,11 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
                             href={selectedCatalogProductUrl}
                             target="_blank"
                             rel="noreferrer"
-                            aria-label="Открыть выбранный товар на сайте Вертикаль"
-                            title="Открыть выбранный товар на сайте Вертикаль"
+                            aria-label={`Открыть выбранный товар на сайте поставщика ${selectedCatalogOption.supplier.name}`}
+                            title={`Открыть карточку товара: ${selectedCatalogOption.supplier.name}`}
                           >
                             <ExternalLink size={14} />
-                            <span>Вертикаль</span>
+                            <span>ссылка</span>
                           </a>
                         ) : null}
                       </div>
@@ -1379,10 +2230,21 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
                 </div>
 
                 <div className="kp-product-facts">
-                  <article>
-                    <span>Поставщик</span>
-                    <strong>{selectedCatalogOption.supplier.name}</strong>
-                    <small>{selectedCatalogOption.supplier.updateNote}</small>
+                  <article className={`kp-product-supplier-card ${selectedSupplierLogoUrl ? 'has-logo' : ''}`.trim()}>
+                    {selectedSupplierLogoUrl ? (
+                      <span className="kp-supplier-logo-card">
+                        <img
+                          src={selectedSupplierLogoUrl}
+                          alt={`Логотип поставщика ${selectedCatalogOption.supplier.name}`}
+                          loading="lazy"
+                        />
+                      </span>
+                    ) : (
+                      <>
+                        <span>Поставщик</span>
+                        <strong>{selectedCatalogOption.supplier.name}</strong>
+                      </>
+                    )}
                   </article>
                   <article>
                     <span>Вариант</span>
@@ -1417,9 +2279,34 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
                   </label>
                   <article>
                     <span>Закупка за ед.</span>
-                    <strong>{formatMoney(selectedCatalogOption.variant.purchasePrice)}</strong>
+                    <strong>{formatCatalogPrice(selectedCatalogOption.variant.purchasePrice)}</strong>
                   </article>
                 </div>
+
+                {constructorPricingPreview ? (
+                  <div className="kp-product-calculation-grid" aria-live="polite">
+                    <article>
+                      <span>Закупка</span>
+                      <strong>{formatMoney(constructorPricingPreview.purchaseUnitPrice)}</strong>
+                    </article>
+                    <article>
+                      <span>Сумма закуп.</span>
+                      <strong>{formatMoney(constructorPricingPreview.purchaseTotal)}</strong>
+                    </article>
+                    <article>
+                      <span>Наценка/ед.</span>
+                      <strong>{formatMoney(constructorPricingPreview.marginUnit)}</strong>
+                    </article>
+                    <article>
+                      <span>Сумма нац.</span>
+                      <strong>{formatMoney(constructorPricingPreview.margin)}</strong>
+                    </article>
+                    <article>
+                      <span>%</span>
+                      <strong>{formatConstructorPercent(constructorPricingPreview.marginPercent)}</strong>
+                    </article>
+                  </div>
+                ) : null}
 
                 <div className="kp-product-add-row">
                   <button
@@ -1590,12 +2477,24 @@ export function KpEditorPage({ projectId = null, darkTheme = false, embedded = f
       ) : null}
 
       <main className={`page ${activeView === 'home' ? 'page-home' : ''} ${activeView === 'work' ? 'page-work' : ''}`}>
-        {activeView === 'home' ? renderHome() : null}
-        {activeView === 'work' ? renderWork() : null}
-        {activeView === 'history' ? renderHistory() : null}
-        {activeView === 'settings' ? renderSettings() : null}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={activeView}
+            className="kp-view-transition"
+            initial={viewInitial}
+            animate={viewAnimate}
+            exit={viewExit}
+            transition={viewTransition}
+          >
+            {activeView === 'home' ? renderHome() : null}
+            {activeView === 'work' ? renderWork() : null}
+            {activeView === 'history' ? renderHistory() : null}
+            {activeView === 'settings' ? renderSettings() : null}
+          </motion.div>
+        </AnimatePresence>
       </main>
 
+      {renderHistoryModal()}
     </div>
   )
 }

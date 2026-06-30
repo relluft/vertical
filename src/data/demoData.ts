@@ -900,44 +900,6 @@ export function getKpDemoScenarios(): KpDemoScenario[] {
   ]
 }
 
-function getInitialKpOfferTable(): DemoOfferTable {
-  const items: DemoOfferTableItem[] = [
-    {
-      id: 'offer-battery-casil',
-      sourceNeed:
-        'Аккумуляторная батарея для лестничного гусеничного подъемника "Барс-УГП 130" - 2 шт.',
-      description:
-        'Аккумуляторная батарея (CASIL CA12120 2 12 В / 12 Ач, F2 10601042) для лестничного гусеничного подъемника "Барс-УГП 130"',
-      productCode: 'CASIL-CA12120',
-      unit: 'шт',
-      quantity: 2,
-      unitPrice: 5619,
-      installationUnitPrice: 5619,
-      minSalePrice: 5619,
-      maxSalePrice: 5619,
-      marketBenchmark: 5619,
-      reviewStatus: 'готово',
-      managerComment: '',
-    },
-  ]
-  const pricedItems = items.map((item) => applyKpPriceAdjustments(item))
-  const subtotal = sumOfferAmounts(pricedItems)
-
-  return {
-    items: pricedItems,
-    totals: [
-      {
-        id: 'offer-subtotal',
-        label: 'ИТОГО',
-        productTotal: subtotal.productTotal,
-        installationTotal: subtotal.installationTotal,
-        grandTotal: subtotal.grandTotal,
-        tone: 'subtotal',
-      },
-    ],
-  }
-}
-
 function makeCellSource(label: string, sourceType: 'norm' | 'price' | 'photo' | 'note', excerpt: string) {
   return {
     label,
@@ -1577,7 +1539,7 @@ export function createInitialDemoState(): DemoState {
       ...(JSON.parse(JSON.stringify(emptyDraft)) as DemoDraft),
       fields: getDemoDraftFields(),
       sections: getDemoDraftSections('kp', initialPipelineName),
-      offerTable: getInitialKpOfferTable(),
+      offerTable: createEmptyOfferTable(),
       cellAnnotations: {},
       issues: [],
       sources: [],

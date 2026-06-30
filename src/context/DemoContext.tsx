@@ -47,6 +47,8 @@ const storageKey = 'uchet-system-kp-editor-state-v2'
 const removedFastenersPattern =
   /^.*(?:Креп[её]ж и доборные элементы для монтажа|состав уточнить|состав не указан).*$/gim
 const removedFastenersId = 'offer-missing-fasteners'
+const legacyInitialBatteryId = 'offer-battery-casil'
+const legacyInitialBatteryCode = 'CASIL-CA12120'
 
 interface DemoContextValue {
   state: DemoState
@@ -138,8 +140,23 @@ function removeFastenersLine(value: string) {
     .trim()
 }
 
+function isLegacyInitialBatteryTable(offerTable: DemoOfferTable | null) {
+  const items = offerTable?.items ?? []
+  const item = items[0]
+  const itemText = `${item?.sourceNeed ?? ''} ${item?.description ?? ''}`
+
+  return (
+    items.length === 1 &&
+    item?.id === legacyInitialBatteryId &&
+    item.productCode === legacyInitialBatteryCode &&
+    itemText.includes('CASIL CA12120')
+  )
+}
+
 function sanitizeDemoState(state: DemoState): DemoState {
-  const offerTable = state.draft.offerTable
+  const offerTable = isLegacyInitialBatteryTable(state.draft.offerTable)
+    ? createEmptyOfferTable()
+    : state.draft.offerTable
 
   return {
     ...state,
@@ -160,7 +177,9 @@ function sanitizeDemoState(state: DemoState): DemoState {
         : null,
       cellAnnotations: Object.fromEntries(
         Object.entries(state.draft.cellAnnotations).filter(
-          ([cellId]) => !cellId.startsWith(`kp-item:${removedFastenersId}:`),
+          ([cellId]) =>
+            !cellId.startsWith(`kp-item:${removedFastenersId}:`) &&
+            !cellId.startsWith(`kp-item:${legacyInitialBatteryId}:`),
         ),
       ),
       issues: state.draft.issues.filter((issue) => !issue.id.includes(removedFastenersId)),

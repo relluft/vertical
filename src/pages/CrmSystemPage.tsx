@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
+import { AnimatePresence, motion, useReducedMotion, type Transition } from 'framer-motion'
 import {
   Activity,
   ArrowRight,
@@ -6,9 +7,7 @@ import {
   Bell,
   BriefcaseBusiness,
   Building2,
-  CalendarDays,
   CheckCircle2,
-  ChevronDown,
   DatabaseBackup,
   Download,
   Eye,
@@ -25,7 +24,6 @@ import {
   Save,
   Search,
   Settings2,
-  ShieldCheck,
   Sun,
   Trash2,
   UserCog,
@@ -123,6 +121,7 @@ export type WorkFilterId =
   | 'tasks'
   | 'closed'
 type CatalogAvailabilityFilter = 'all' | 'stock' | 'order' | 'check'
+type CatalogPriceSort = 'default' | 'asc' | 'desc'
 type ProjectAmountFilter = 'all' | 'under250' | 'from250to1000' | 'over1000'
 type ProjectNextActionFilter = 'all' | 'overdue' | 'today' | 'week' | 'month' | 'empty'
 type ProjectQuoteFilter = 'all' | 'missing' | 'draft' | 'sent' | 'accepted'
@@ -243,6 +242,11 @@ interface CatalogRecord {
   variant: ProductVariant
   supplier?: Supplier
   priceHistory: PriceHistory[]
+}
+
+interface CatalogFamily {
+  id: string
+  label: string
 }
 
 interface ManagerAnalyticsRow {
@@ -382,6 +386,27 @@ const catalogAvailabilityLabels: Record<CatalogAvailabilityFilter, string> = {
   order: 'Под заказ',
   check: 'Требуют проверки',
 }
+
+const catalogPriceSortLabels: Record<CatalogPriceSort, string> = {
+  default: 'Сначала свежие',
+  asc: 'Дешевле',
+  desc: 'Дороже',
+}
+
+const catalogFamilies: CatalogFamily[] = [
+  { id: 'all', label: 'Все товары' },
+  { id: 'tile', label: 'Тактильная плитка' },
+  { id: 'indicators', label: 'Индикаторы и направляющие' },
+  { id: 'antislip', label: 'Профили и ленты' },
+  { id: 'call', label: 'Кнопки и системы вызова' },
+  { id: 'signs', label: 'Таблички и знаки' },
+  { id: 'mnemoschemes', label: 'Мнемосхемы' },
+  { id: 'ramps', label: 'Пандусы и поручни' },
+  { id: 'electronics', label: 'Звук и табло' },
+  { id: 'other', label: 'Прочее' },
+]
+
+const catalogFamilyFallback = catalogFamilies[catalogFamilies.length - 1]
 
 const defaultProjectAdvancedFilters: ProjectAdvancedFilters = {
   status: 'all',
@@ -1068,7 +1093,7 @@ function buildCatalogRecords(state: CrmState): CatalogRecord[] {
 }
 
 function normalizeCatalogText(value: string) {
-  return value.toLocaleLowerCase('ru-RU').trim()
+  return value.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').trim()
 }
 
 function getCatalogSearchText(record: CatalogRecord) {
@@ -1090,6 +1115,116 @@ function getCatalogSearchText(record: CatalogRecord) {
   )
 }
 
+const legacyCatalogSourceWord = ['п', 'а', 'р', 'с', '[её]', 'р'].join('')
+const legacyCatalogSourceGenitive = `${legacyCatalogSourceWord}а`
+const legacyCatalogVariantLabelPattern = new RegExp(`вариант из (каталога|${legacyCatalogSourceGenitive})`)
+
+function isParserVariantLabel(value?: string) {
+  return value ? legacyCatalogVariantLabelPattern.test(value.toLocaleLowerCase('ru-RU')) : false
+}
+
+function getVariantSizeLabel(variant: ProductVariant) {
+  return variant.size && !isParserVariantLabel(variant.size) ? variant.size : ''
+}
+
+function getCatalogVariantMeta(record: CatalogRecord) {
+  const sizeLabel = getVariantSizeLabel(record.variant)
+  const variantName = record.variant.variantName !== record.product.name ? record.variant.variantName : ''
+
+  return sizeLabel || variantName || record.product.category
+}
+
+function getCatalogVariantDetail(record: CatalogRecord) {
+  return [
+    getVariantSizeLabel(record.variant),
+    record.variant.color && record.variant.color !== 'по карточке' ? record.variant.color : '',
+    record.variant.material && record.variant.material !== 'по карточке' ? record.variant.material : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function getCatalogFamilyById(id: string) {
+  return catalogFamilies.find((family) => family.id === id) ?? catalogFamilyFallback
+}
+
+function getCatalogFamily(record: CatalogRecord) {
+  const text = getCatalogSearchText(record)
+
+  if (text.includes('мнемосхем')) {
+    return getCatalogFamilyById('mnemoschemes')
+  }
+
+  if (text.includes('кнопк') || text.includes('вызов') || text.includes('помощ') || text.includes('приемник')) {
+    return getCatalogFamilyById('call')
+  }
+
+  if (
+    text.includes('противосколь') ||
+    text.includes('проступ') ||
+    text.includes('профил') ||
+    text.includes('накладк') ||
+    text.includes('ступен') ||
+    text.includes('самоклеящ')
+  ) {
+    return getCatalogFamilyById('antislip')
+  }
+
+  if (text.includes('плитк')) {
+    return getCatalogFamilyById('tile')
+  }
+
+  if (
+    text.includes('индикатор') ||
+    text.includes('направляющ') ||
+    (text.includes('тактильн') && (text.includes('полос') || text.includes('конус') || text.includes('лента')))
+  ) {
+    return getCatalogFamilyById('indicators')
+  }
+
+  if (text.includes('таблич') || text.includes('пиктограмм') || text.includes('знак')) {
+    return getCatalogFamilyById('signs')
+  }
+
+  if (
+    text.includes('пандус') ||
+    text.includes('рамп') ||
+    text.includes('подъемник') ||
+    text.includes('поруч') ||
+    text.includes('кабин')
+  ) {
+    return getCatalogFamilyById('ramps')
+  }
+
+  if (
+    text.includes('индукц') ||
+    text.includes('звуков') ||
+    text.includes('маяк') ||
+    text.includes('табло') ||
+    text.includes('бегущ')
+  ) {
+    return getCatalogFamilyById('electronics')
+  }
+
+  return catalogFamilyFallback
+}
+
+function getCatalogPrice(record: CatalogRecord) {
+  return Math.round(Math.max(0, record.variant.purchasePrice || record.product.basePurchasePrice || 0) * 100) / 100
+}
+
+function getSupplierLogoUrl(supplier?: Supplier) {
+  return supplier?.logoUrl ?? ''
+}
+
+function getCatalogImageUrl(record: CatalogRecord) {
+  return record.product.imageUrl || getCatalogPreviewDataUri(record)
+}
+
+function getCatalogProductUrl(record: CatalogRecord) {
+  return record.product.sourceUrl || ''
+}
+
 function matchesCatalogAvailability(record: CatalogRecord, filter: CatalogAvailabilityFilter) {
   if (filter === 'all') {
     return true
@@ -1097,14 +1232,14 @@ function matchesCatalogAvailability(record: CatalogRecord, filter: CatalogAvaila
 
   const text = normalizeCatalogText(
     `${record.product.availability} ${record.variant.availability} ${record.supplier?.updateStatus ?? ''} ${
-      record.supplier?.updateNote ?? ''
+      getSupplierUpdateNote(record.supplier)
     }`,
   )
   const needsCheck =
     record.supplier?.updateStatus !== 'fresh' ||
     /проверк|сохран|устар|needs_check|outdated/.test(text)
   const orderOnly = /под заказ|изготов/.test(text)
-  const inStock = /\d/.test(text) && !needsCheck && !orderOnly
+  const inStock = (/в наличии|на складе|достаточно|много|\d/.test(text)) && !needsCheck && !orderOnly
 
   if (filter === 'stock') return inStock
   if (filter === 'order') return orderOnly
@@ -1118,11 +1253,49 @@ function getCatalogUpdateTone(status?: Supplier['updateStatus']): Tone {
   return 'slate'
 }
 
+function getCatalogAvailabilityBadge(record: CatalogRecord): { label: string; tone: Tone } {
+  if (matchesCatalogAvailability(record, 'check')) {
+    return { label: 'Проверить', tone: 'violet' }
+  }
+
+  if (matchesCatalogAvailability(record, 'order')) {
+    return { label: 'Под заказ', tone: 'amber' }
+  }
+
+  if (matchesCatalogAvailability(record, 'stock')) {
+    return { label: 'В наличии', tone: 'green' }
+  }
+
+  return { label: record.variant.availability || record.product.availability || 'Наличие не указано', tone: 'slate' }
+}
+
+function getCatalogUpdateLabel(status?: Supplier['updateStatus']) {
+  if (status === 'fresh') return 'Актуально'
+  if (status === 'outdated') return 'Старая цена'
+  if (status === 'needs_check') return 'Проверить'
+  return 'Нет статуса'
+}
+
 function getSupplierSourceLabel(source?: Supplier['sourceType']) {
-  if (source === 'site_catalog') return 'Парсер сайта'
+  if (source === 'site_catalog') return 'Каталог поставщика'
   if (source === 'excel') return 'Excel-прайс'
   if (source === 'manual') return 'Ручной ввод'
   return 'Источник не указан'
+}
+
+function getSupplierUpdateNote(supplier?: Supplier) {
+  const legacyLocalCatalogPattern = new RegExp(`Мок-каталог из локального ${legacyCatalogSourceGenitive}:`, 'gi')
+  const legacyCatalogImportPattern = new RegExp(`Локальная выгрузка ${legacyCatalogSourceGenitive}:`, 'gi')
+  const legacySiteCatalogPattern = new RegExp(`${legacyCatalogSourceWord} сайта`, 'gi')
+  const legacyCatalogSourceGenitivePattern = new RegExp(legacyCatalogSourceGenitive, 'gi')
+  const legacyCatalogSourceWordPattern = new RegExp(legacyCatalogSourceWord, 'gi')
+
+  return (supplier?.updateNote ?? '')
+    .replace(legacyLocalCatalogPattern, 'Локальный каталог:')
+    .replace(legacyCatalogImportPattern, 'Локальная выгрузка каталога:')
+    .replace(legacySiteCatalogPattern, 'каталог поставщика')
+    .replace(legacyCatalogSourceGenitivePattern, 'каталога')
+    .replace(legacyCatalogSourceWordPattern, 'каталог')
 }
 
 function getCatalogInitials(value: string) {
@@ -1385,7 +1558,7 @@ function buildSidebarSystemNotifications(
       id: `system-catalog-${supplier.id}`,
       kind: 'notification',
       title: 'Каталог: прайс требует проверки',
-      details: supplier.updateNote || `Поставщик ${supplier.name} ожидает обновления данных.`,
+      details: getSupplierUpdateNote(supplier) || `Поставщик ${supplier.name} ожидает обновления данных.`,
       meta: supplier.name,
       createdAt: supplier.lastUpdatedAt,
     }))
@@ -1664,67 +1837,134 @@ function getProjectComment(record: WorkRecord) {
     return record.deal.inlineComment.trim()
   }
 
-  const parts: string[] = []
-  const seen = new Set<string>()
-  const description = record.deal.description.trim()
-  const objectNote = record.object?.importantNotes.trim()
-  const objectComment = record.object?.comment.trim()
-  const nextAction = record.deal.nextActionText.trim()
-  const visibleDocuments = record.documents.slice(0, 3).map((document) => document.title)
-  const moneyText = (value: number) => formatMoney(value).replace(/\.$/, '')
+  const sourceText = [
+    record.deal.title,
+    record.deal.description,
+    record.object?.name,
+    record.object?.comment,
+  ].filter(Boolean).join(' ').toLowerCase()
+  const measurements = record.notes.flatMap((note) => note.measurements)
+  const normalizeInstallerNote = (value: string) => {
+    const normalized = value
+      .replace(/^демо-?/i, '')
+      .replace(/^осмотр входной группы/i, 'Входная группа')
+      .replace(/^осмотр\s+/i, '')
+      .replace(/\s+/g, ' ')
+      .trim()
 
-  const sentence = (prefix: string, value: string | undefined) => {
-    const text = value?.replace(/\s+/g, ' ').trim()
+    return normalized ? `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}` : ''
+  }
+  const installerText = record.notes
+    .map((note) => normalizeInstallerNote(note.text))
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(' ')
+  const measurementsText = measurements.length
+    ? ` Замеры: ${measurements.map((item) => `${item.label.toLowerCase()} ${item.value}`).join(', ')}.`
+    : ''
+  const hasAny = (patterns: RegExp[]) => patterns.some((pattern) => pattern.test(sourceText))
+  const fieldLine = (fallback: string) => installerText
+    ? `${installerText}${/[.!?]$/.test(installerText) ? '' : '.'}${measurementsText}`
+    : `${fallback}${measurementsText}`
+  const buildInstallerComment = (
+    observations: string[],
+    estimateItems: string[],
+    laterItems: string[],
+  ) => [
+    ...observations.map((item) => `- ${item}`),
+    'В расчет:',
+    ...estimateItems.map((item) => `- ${item}`),
+    'Перед запуском:',
+    ...laterItems.map((item) => `- ${item}`),
+  ].join('\n')
 
-    if (!text) return undefined
-
-    return `${prefix}${text}${/[.!?]$/.test(text) ? '' : '.'}`
+  if (hasAny([/санузел|мгн|кафе/])) {
+    return buildInstallerComment(
+      [
+        fieldLine('У двери и раковины важны проходы и зона разворота: поручни не должны мешать створке, подходу к раковине и движению внутри помещения.'),
+        'По стенам нужно смотреть плитку, пустоты под облицовкой и места рядом с трубами: слабые участки лучше сразу помечать на фото крупным планом.',
+        'Откидной поручень, крючки, пиктограммы и ограничители двери могут конфликтовать между собой, поэтому расстояния лучше считать от фактических кромок, а не по старой схеме.',
+      ],
+      [
+        'Отдельными строками нужны настенные поручни, откидной поручень, пиктограммы, крючки, усиленный крепеж, герметизация отверстий и расходники.',
+        'Нужен запас на подгонку по месту и выезд на разметку: после проверки высот часть позиций может уйти в другой размер или другой тип крепления.',
+      ],
+      [
+        'В конце уточнить, можно ли закрыть санузел на время работ, где брать доступ к воде/электричеству и кто принимает разметку перед сверлением.',
+        'Риск оставить в хвосте: слабое основание, трубы под плиткой, замечания приемки по зазорам, цвету и радиусам окончаний поручней.',
+      ],
+    )
   }
 
-  const addPart = (value: string | undefined) => {
-    const normalized = value?.replace(/\s+/g, ' ').trim()
-
-    if (!normalized) return
-
-    const key = normalized.toLowerCase()
-
-    if (seen.has(key)) return
-
-    seen.add(key)
-    parts.push(normalized)
+  if (hasAny([/навигац|таблич|мнем|пикт|указател|аудитор|кабинет|этаж|зал|холл|маршрут|тактил/])) {
+    return buildInstallerComment(
+      [
+        fieldLine('Маршрут читается по точкам выбора направления: вход, развилка, лифт, лестница, санузел, нужные кабинеты и зона ожидания должны быть понятны без подсказок персонала.'),
+        'Фактические номера кабинетов и названия зон надо сверять с тем, что висит сейчас; старые держатели, лишние отверстия и следы клея лучше фиксировать отдельно.',
+        'На глянцевых стенах и стекле есть риск бликов, поэтому для табличек важны угол обзора, высота от пола и свободное место вокруг крепления.',
+      ],
+      [
+        'В расчет идут обычные указатели, тактильные таблички, пиктограммы, мнемосхема, сменные вставки, крепеж и выезд на разметку.',
+        'Таблички считать по фактическим дверям и развилкам, а не только по схеме: часть помещений может иметь другое название или временную табличку.',
+      ],
+      [
+        'В конце уточнить язык, формулировки, актуальную схему этажа, кто утверждает макеты и в какие часы можно сверлить без помех посетителям.',
+        'Отдельно оставить риск по смене названий кабинетов, разным покрытиям стен, старым держателям и точкам, которые нужно продублировать у лифта или лестницы.',
+      ],
+    )
   }
 
-  addPart(sentence('Ситуация: ', description))
-  addPart(
-    record.object
-      ? `Объект: ${record.object.name}, адрес работ ${record.object.address}. Текущий статус объекта: ${objectStatusLabels[record.object.status]}.`
-      : undefined,
-  )
-  addPart(objectNote && objectNote !== nextAction ? sentence('Ограничения по объекту: ', objectNote) : undefined)
-  addPart(objectComment && objectComment !== description ? sentence('Комментарий по площадке: ', objectComment) : undefined)
-  addPart(
-    record.quotes.length
-      ? `КП в работе: ${record.quotes.map((quote) => quote.number).join(', ')}; сумма по КП ${record.quoteTotal ? moneyText(record.quoteTotal) : 'уточняется'}.`
-      : `КП еще не создано, нужно собрать состав работ и зафиксировать закупочные цены перед отправкой заказчику.`,
-  )
-  addPart(
-    record.payments.length
-      ? `Оплата: ${paymentStatusLabels[record.deal.paymentStatus]}, остаток к контролю ${moneyText(record.dueAmount)}.`
-      : `Оплата: счет пока не выставлен, ориентир проекта ${moneyText(record.deal.expectedAmount)}.`,
-  )
-  addPart(
-    record.overdueAmount
-      ? `Риск: есть просрочка ${moneyText(record.overdueAmount)}, отгрузку и монтаж не запускать без решения по оплате.`
-      : undefined,
-  )
-  addPart(
-    visibleDocuments.length
-      ? `Документы в карточке: ${visibleDocuments.join(', ')}${record.documents.length > visibleDocuments.length ? ' и другие вложения' : ''}.`
-      : `Документы нужно дозаполнить: договор, ТЗ, план работ и счет должны быть доступны в карточке проекта.`,
-  )
-  addPart(nextAction ? `Следующий шаг: ${nextAction}; контроль ${safeFormatDateTime(record.deal.nextActionAt)} (${relativeAction(record.deal.nextActionAt)}).` : undefined)
+  if (hasAny([/поруч|пандус|лестнич|вход|двор|марш|кнопк/])) {
+    return buildInstallerComment(
+      [
+        fieldLine('Основание под анкера, ширина прохода и перепады высоты критичны: поручень не должен упираться в дверь, откос, водосток, домофон или наружную отделку.'),
+        'Если бетон, плитка, ступени или кромки старые и крошатся, крепеж лучше считать усиленным, с подготовкой основания и герметизацией наружных отверстий.',
+        'На входной группе важно сохранить проход людям: проблемные узлы нужно снимать с рулеткой в кадре, особенно возле дверей, кнопки вызова и разворота коляски.',
+      ],
+      [
+        'В расчет идут поручни, кронштейны с запасом, торцевые заглушки, усиленный крепеж, герметизация, разметка и подгонка по месту.',
+        'Отдельно учитывать резку/подрезку, расходники для уличного крепления и временное ограждение зоны, если монтаж идет при открытом входе.',
+      ],
+      [
+        'В конце уточнить радиусы окончаний, высоты, цвет, можно ли перекрыть проход и кто принимает высоты до сверления.',
+        'Риск оставить в хвосте: вода, наледь, слабое основание, старые элементы под демонтаж и восстановление отверстий после снятия старого крепежа.',
+      ],
+    )
+  }
 
-  return parts.join(' ') || 'Комментарий не указан.'
+  if (hasAny([/огражд|склад|промышлен|кпп|стойк|маркировк|отгруз/])) {
+    return buildInstallerComment(
+      [
+        fieldLine('Маршрут пересекается с людьми, техникой и зонами разгрузки, поэтому важны ширина проездов, радиусы разворота и фактические точки крепления.'),
+        'Покрытие пола надо смотреть отдельно: трещины, уклоны, старая разметка, пыль или масло влияют на крепеж, подготовку основания и стойкость маркировки.',
+        'Стойки и ограждения не должны мешать погрузчику, тележке, аварийному проходу и зонам отгрузки; спорные места лучше привязывать к колоннам или воротам.',
+      ],
+      [
+        'В расчет идут защитные стойки, сигнальная разметка, поручни, таблички, подготовка основания, шаблоны разметки и расходники для пола.',
+        'Нужно учитывать доставку длинномера, временные ограждения и возможную ночную смену, если днем участок нельзя остановить из-за отгрузок.',
+      ],
+      [
+        'В конце уточнить окно монтажа, пропускной режим, требования по СИЗ, доступ к зоне разгрузки и кто сопровождает бригаду по территории.',
+        'Риск оставить в хвосте: погрузчики, простои, пыльный пол, ограничения по искрообразованию и приемка по очередям зон, а не всего объекта сразу.',
+      ],
+    )
+  }
+
+  return buildInstallerComment(
+    [
+      fieldLine('Фактический маршрут, точки крепления, материал стен и пола, ширина проходов и высоты установки определяют, где изделие встанет без конфликта с дверьми или мебелью.'),
+      'Проблемные места лучше фиксировать крупно: старые отверстия, рыхлые стены, закрытые коммуникации, узкие проходы и зоны активного движения людей.',
+      'Для длинных или тяжелых элементов важны занос, место под инструмент, доступ к розетке и возможность временно ограничить проход рядом с точкой монтажа.',
+    ],
+    [
+      'В расчет идут изделия, крепеж, подготовка основания, выезд на разметку, доставка крупного элемента и запас на подгонку по месту.',
+      'Отдельно учитывать демонтаж, восстановление старых отверстий и расходники, если они не входят в базовую установку.',
+    ],
+    [
+      'В конце уточнить время работ, кто дает доступ в помещение, кто принимает разметку и как фиксируются изменения на объекте.',
+      'Риск оставить в хвосте: шум, пыль, скрытые коммуникации, плавающая планировка и необходимость сохранить проход для посетителей.',
+    ],
+  )
 }
 
 function getHashIndex(value: string, modulo: number) {
@@ -2652,19 +2892,53 @@ function SidebarNotificationModal({
 }
 
 function WorkOverview({
-  isPersonalScope,
+  state,
+  records,
+  summary,
+  catalogCount,
   onNavigate,
   onOpenKpEditor,
 }: {
-  isPersonalScope: boolean
+  state: CrmState
+  records: WorkRecord[]
+  summary: ReturnType<typeof summarizeRecords>
+  catalogCount: number
   onNavigate: (filter: WorkFilterId, module?: SidebarModuleId) => void
   onOpenKpEditor: (dealId?: string) => void
 }) {
+  const activeRecords = records.filter((record) => !isClosedDeal(record))
+  const urgentRecords = activeRecords.filter(isUrgentRecord)
+  const overdueRecords = activeRecords.filter((record) => record.overdueAmount > 0)
+  const scopedQuotes = records
+    .flatMap((record) => record.quotes)
+    .filter((quote) => quote.status !== 'declined' && quote.status !== 'archived')
+  const draftQuotes = scopedQuotes.filter((quote) => quote.status === 'draft' || quote.status === 'ready')
+  const quotesAwaitingReply = scopedQuotes.filter((quote) => quote.status === 'exported' || quote.status === 'sent')
+  const uniqueCounterparties = new Set(
+    records
+      .map((record) => record.counterparty?.id)
+      .filter((counterpartyId): counterpartyId is string => Boolean(counterpartyId)),
+  ).size
+  const documentsForReview = records.reduce(
+    (sum, record) => sum + record.documents.filter((document) => document.status === 'needs_review').length,
+    0,
+  )
+  const openTasks = records.reduce(
+    (sum, record) => sum + record.reminders.filter((reminder) => reminder.status !== 'done').length,
+    0,
+  )
+  const suppliersNeedingUpdate = state.suppliers.filter((supplier) => supplier.updateStatus !== 'fresh').length
+  const freshSuppliers = state.suppliers.length - suppliersNeedingUpdate
+  const activeUsers = state.users.filter((user) => user.isActive).length
+
   const actionCards = [
     {
       icon: <BriefcaseBusiness size={26} />,
       title: 'Проекты',
-      text: isPersonalScope ? 'Мои проекты: статусы, сроки и действия' : 'Реестр работ: статусы, сроки, ответственные',
+      metrics: [
+        { value: activeRecords.length, label: 'активных', tone: 'blue' as Tone },
+        { value: urgentRecords.length, label: 'срочных', tone: urgentRecords.length ? 'red' as Tone : 'slate' as Tone },
+      ],
       tone: 'blue' as Tone,
       orbit: 'is-projects',
       onClick: () => onNavigate('all', 'projects'),
@@ -2672,7 +2946,10 @@ function WorkOverview({
     {
       icon: <Building2 size={26} />,
       title: 'Контрагенты',
-      text: 'Клиенты, реквизиты, объекты и контакты',
+      metrics: [
+        { value: uniqueCounterparties, label: 'клиентов', tone: 'slate' as Tone },
+        { value: records.length, label: 'проектов', tone: 'blue' as Tone },
+      ],
       tone: 'slate' as Tone,
       orbit: 'is-counterparties',
       onClick: () => onNavigate('all', 'counterparties'),
@@ -2680,7 +2957,14 @@ function WorkOverview({
     {
       icon: <PackageSearch size={26} />,
       title: 'Каталог',
-      text: 'Товары, цены, поставщики и история прайсов',
+      metrics: [
+        { value: catalogCount, label: 'товаров', tone: 'blue' as Tone },
+        {
+          value: suppliersNeedingUpdate || `${freshSuppliers}/${state.suppliers.length}`,
+          label: suppliersNeedingUpdate ? 'прайсы' : 'актуальны',
+          tone: suppliersNeedingUpdate ? 'amber' as Tone : 'green' as Tone,
+        },
+      ],
       tone: 'blue' as Tone,
       orbit: 'is-catalog',
       onClick: () => onNavigate('all', 'catalog'),
@@ -2688,7 +2972,10 @@ function WorkOverview({
     {
       icon: <BarChart3 size={26} />,
       title: 'Аналитика',
-      text: isPersonalScope ? 'Мои показатели без сравнения с командой' : 'Воронка, оплаты, КП и показатели команды',
+      metrics: [
+        { value: formatMoneyCompact(summary.pipeline), label: 'портфель', tone: 'green' as Tone },
+        { value: overdueRecords.length, label: 'рисков', tone: overdueRecords.length ? 'red' as Tone : 'slate' as Tone },
+      ],
       tone: 'green' as Tone,
       orbit: 'is-analytics',
       onClick: () => onNavigate('all', 'analytics'),
@@ -2696,7 +2983,10 @@ function WorkOverview({
     {
       icon: <FileText size={26} />,
       title: 'КП',
-      text: 'Собрать позиции, рассчитать цену и выгрузить документ',
+      metrics: [
+        { value: draftQuotes.length, label: 'черновиков', tone: draftQuotes.length ? 'amber' as Tone : 'slate' as Tone },
+        { value: quotesAwaitingReply.length, label: 'на ответе', tone: 'violet' as Tone },
+      ],
       tone: 'violet' as Tone,
       orbit: 'is-quotes',
       onClick: () => onOpenKpEditor(),
@@ -2704,7 +2994,10 @@ function WorkOverview({
     {
       icon: <Wrench size={26} />,
       title: 'Настройки',
-      text: isPersonalScope ? 'Параметры рабочего места и документов' : 'Пользователи, роли, источники и резервные копии',
+      metrics: [
+        { value: activeUsers, label: 'пользователей', tone: 'slate' as Tone },
+        { value: documentsForReview || openTasks, label: documentsForReview ? 'проверок' : 'задач', tone: documentsForReview ? 'amber' as Tone : 'blue' as Tone },
+      ],
       tone: 'slate' as Tone,
       orbit: 'is-settings',
       onClick: () => onNavigate('all', 'settings'),
@@ -2727,7 +3020,14 @@ function WorkOverview({
             <span className="work-overview-action-icon">{action.icon}</span>
             <span className="work-overview-action-copy">
               <b>{action.title}</b>
-              <small>{action.text}</small>
+            </span>
+            <span className="work-overview-action-metrics" aria-label={`Сводка: ${action.metrics.map((metric) => `${metric.value} ${metric.label}`).join(', ')}`}>
+              {action.metrics.map((metric) => (
+                <span key={metric.label} className={classNames('work-overview-action-pill', `is-${metric.tone}`)}>
+                  <strong>{metric.value}</strong>
+                  <small>{metric.label}</small>
+                </span>
+              ))}
             </span>
             <span className="work-overview-action-meta">
               <ArrowRight size={18} />
@@ -2754,6 +3054,7 @@ interface ProjectDetailField {
   note?: ReactNode
   tone?: Tone
   wide?: boolean
+  kind?: 'comment'
   actionLabel?: string
   onClick?: () => void
   edit?: {
@@ -2766,14 +3067,24 @@ interface ProjectDetailField {
   }
 }
 
-function ProjectDetailInfoCard({ field }: { field: ProjectDetailField }) {
+type ProjectDetailsTabId = 'overview' | 'data' | 'finance' | 'history'
+
+const projectDetailsTabs: Array<{ id: ProjectDetailsTabId; label: string }> = [
+  { id: 'overview', label: 'Обзор' },
+  { id: 'data', label: 'Данные' },
+  { id: 'finance', label: 'КП и оплаты' },
+  { id: 'history', label: 'История' },
+]
+
+function ProjectDetailFieldLine({ field }: { field: ProjectDetailField }) {
   const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState(field.edit?.value ?? '')
   const canEdit = Boolean(field.edit)
   const className = classNames(
-    'work-project-info-card work-project-detail-card',
+    'work-project-data-field',
     field.tone && `is-${field.tone}`,
     field.wide && 'is-wide',
+    field.kind === 'comment' && 'is-comment',
     field.onClick && !canEdit && 'is-clickable',
     canEdit && 'is-editable',
     isEditing && 'is-editing',
@@ -2794,68 +3105,75 @@ function ProjectDetailInfoCard({ field }: { field: ProjectDetailField }) {
     setIsEditing(false)
   }
 
-  if (isEditing && field.edit) {
+  const renderValue = () => {
+    if (isEditing && field.edit) {
+      return (
+        <>
+          {field.edit.multiline ? (
+            <textarea
+              className="work-project-detail-edit-input"
+              aria-label={field.label}
+              value={draft}
+              placeholder={field.edit.placeholder}
+              autoFocus
+              rows={4}
+              onBlur={saveDraft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  saveDraft()
+                }
+
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  cancelDraft()
+                }
+              }}
+            />
+          ) : (
+            <input
+              className="work-project-detail-edit-input"
+              aria-label={field.label}
+              value={draft}
+              placeholder={field.edit.placeholder}
+              type={field.edit.type ?? 'text'}
+              inputMode={field.edit.inputMode}
+              autoFocus
+              onBlur={saveDraft}
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  saveDraft()
+                }
+
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  cancelDraft()
+                }
+              }}
+            />
+          )}
+          {field.note ? <small>{field.note}</small> : null}
+        </>
+      )
+    }
+
     return (
-      <article className={className}>
-        <span>{field.label}</span>
-        {field.edit.multiline ? (
-          <textarea
-            className="work-project-detail-edit-input"
-            aria-label={field.label}
-            value={draft}
-            placeholder={field.edit.placeholder}
-            autoFocus
-            rows={4}
-            onBlur={saveDraft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                saveDraft()
-              }
-
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                cancelDraft()
-              }
-            }}
-          />
-        ) : (
-          <input
-            className="work-project-detail-edit-input"
-            aria-label={field.label}
-            value={draft}
-            placeholder={field.edit.placeholder}
-            type={field.edit.type ?? 'text'}
-            inputMode={field.edit.inputMode}
-            autoFocus
-            onBlur={saveDraft}
-            onFocus={(event) => event.currentTarget.select()}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                saveDraft()
-              }
-
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                cancelDraft()
-              }
-            }}
-          />
-        )}
+      <>
+        <strong>{field.value}</strong>
         {field.note ? <small>{field.note}</small> : null}
-      </article>
+        {field.actionLabel ? <em>{field.actionLabel}</em> : null}
+      </>
     )
   }
 
   const content = (
     <>
       <span>{field.label}</span>
-      <strong>{field.value}</strong>
-      {field.note ? <small>{field.note}</small> : null}
-      {field.actionLabel ? <em>{field.actionLabel}</em> : null}
+      <div>{renderValue()}</div>
     </>
   )
 
@@ -2891,97 +3209,102 @@ function ProjectDetailInfoCard({ field }: { field: ProjectDetailField }) {
   return <article className={className}>{content}</article>
 }
 
-interface WorkObjectCommentItem {
-  id: string
-  author: string
-  role: string
-  date: string
+function ProjectDetailFieldGroup({
+  title,
+  icon,
+  fields,
+  wide,
+  comments,
+}: {
   title: string
-  text: string
-  editValue?: string
-  onSave?: (value: string) => void
-}
-
-function WorkObjectCommentCard({ comment }: { comment: WorkObjectCommentItem }) {
-  const [isEditing, setIsEditing] = useState(false)
-  const editValue = comment.editValue ?? comment.text
-  const [draft, setDraft] = useState(editValue)
-
-  const saveDraft = () => {
-    if (comment.onSave && draft !== editValue) {
-      comment.onSave(draft)
-    }
-
-    setIsEditing(false)
-  }
-
-  const cancelDraft = () => {
-    setDraft(editValue)
-    setIsEditing(false)
-  }
-
-  if (isEditing && comment.onSave) {
-    return (
-      <article className="work-object-comment-card is-editing">
-        <div>
-          <strong>{comment.title}</strong>
-          <span>{comment.author} · {comment.role} · {comment.date}</span>
-        </div>
-        <textarea
-          className="work-project-detail-edit-input"
-          aria-label={comment.title}
-          value={draft}
-          autoFocus
-          rows={5}
-          onBlur={saveDraft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              saveDraft()
-            }
-
-            if (event.key === 'Escape') {
-              event.preventDefault()
-              cancelDraft()
-            }
-          }}
-        />
-      </article>
-    )
-  }
-
-  if (comment.onSave) {
-    return (
-      <button
-        type="button"
-        className="work-object-comment-card is-editable"
-        onClick={() => {
-          setDraft(editValue)
-          setIsEditing(true)
-        }}
-      >
-        <div>
-          <strong>{comment.title}</strong>
-          <span>{comment.author} · {comment.role} · {comment.date}</span>
-        </div>
-        <p>{comment.text}</p>
-      </button>
-    )
-  }
-
+  icon: ReactNode
+  fields: ProjectDetailField[]
+  wide?: boolean
+  comments?: boolean
+}) {
   return (
-    <article className="work-object-comment-card">
-      <div>
-        <strong>{comment.title}</strong>
-        <span>{comment.author} · {comment.role} · {comment.date}</span>
+    <section className={classNames('work-panel work-detail-section work-detail-data-group', wide && 'is-wide', comments && 'is-comments')}>
+      <div className="work-panel-title">
+        {icon}
+        <h3>{title}</h3>
       </div>
-      <p>{comment.text}</p>
-    </article>
+      <div className="work-project-data-fields">
+        {fields.map((field) => (
+          <ProjectDetailFieldLine key={field.label} field={field} />
+        ))}
+      </div>
+    </section>
   )
 }
 
-function getQuoteActivity(state: CrmState, record: WorkRecord) {
+interface ProjectHistoryItem {
+  id: string
+  title: string
+  details: string
+  actor: string
+  createdAt: string
+  statusLabel: string
+  tone: Tone
+  meta: string
+}
+
+function isSameHistoryMoment(left: string, right: string) {
+  if (!left || !right) return false
+
+  return new Date(left).getTime() === new Date(right).getTime()
+}
+
+function compactHistoryText(value: string, maxLength = 150) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+
+  if (normalized.length <= maxLength) {
+    return normalized
+  }
+
+  return `${normalized.slice(0, maxLength - 1).trim()}...`
+}
+
+function getProjectHistoryTone(kind: string, status?: string): Tone {
+  if (kind === 'payment') {
+    if (status === 'paid') return 'green'
+    if (status === 'overdue') return 'red'
+    if (status === 'partially_paid' || status === 'awaiting_payment') return 'amber'
+    return 'blue'
+  }
+
+  if (kind === 'quote') {
+    if (status === 'accepted') return 'green'
+    if (status === 'declined') return 'red'
+    if (status === 'draft') return 'amber'
+    return 'blue'
+  }
+
+  if (kind === 'deal') {
+    if (status === 'closed_lost') return 'red'
+    if (status === 'closed_won' || status === 'paid') return 'green'
+    if (status === 'awaiting_payment' || status === 'quote_preparation') return 'amber'
+    return 'blue'
+  }
+
+  if (kind === 'task') {
+    if (status === 'done') return 'green'
+    return status === 'overdue' ? 'red' : 'amber'
+  }
+
+  if (kind === 'document') {
+    return status === 'needs_review' ? 'amber' : 'slate'
+  }
+
+  if (kind === 'activity') {
+    if (status?.includes('payment')) return 'green'
+    if (status?.includes('quote')) return 'blue'
+    if (status?.includes('project')) return 'blue'
+  }
+
+  return 'slate'
+}
+
+function buildProjectHistoryItems(state: CrmState, record: WorkRecord, limit = 36): ProjectHistoryItem[] {
   const relatedIds = new Set<string>([
     record.deal.id,
     record.deal.counterpartyId,
@@ -2991,7 +3314,219 @@ function getQuoteActivity(state: CrmState, record: WorkRecord) {
     ...record.documents.map((document) => document.id),
   ])
 
-  return state.activity.filter((item) => relatedIds.has(item.entityId)).slice(0, 8)
+  const activityItems: ProjectHistoryItem[] = state.activity
+    .filter((item) => relatedIds.has(item.entityId))
+    .map((item) => ({
+      id: `activity-${item.id}`,
+      title: item.title,
+      details: item.details || item.action,
+      actor: getUserName(state, item.actorUserId),
+      createdAt: item.createdAt,
+      statusLabel: item.action.includes('payment')
+        ? 'Оплата'
+        : item.action.includes('quote')
+          ? 'КП'
+          : item.action.includes('project')
+            ? 'Проект'
+            : 'Действие',
+      tone: getProjectHistoryTone('activity', item.action),
+      meta: 'запись программы',
+    }))
+
+  const hasProjectCreateActivity = state.activity.some(
+    (item) => item.entityId === record.deal.id && item.action === 'project.created',
+  )
+  const items: ProjectHistoryItem[] = [...activityItems]
+  const projectActor = getUserName(state, record.deal.responsibleUserId)
+
+  if (!hasProjectCreateActivity) {
+    items.push({
+      id: `deal-created-${record.deal.id}`,
+      title: `Проект ${record.deal.number} создан`,
+      details: [record.deal.title, record.counterparty?.shortName || record.counterparty?.name]
+        .filter(Boolean)
+        .join(' · ') || 'Создана карточка проекта.',
+      actor: projectActor,
+      createdAt: record.deal.createdAt,
+      statusLabel: 'Создание',
+      tone: 'blue',
+      meta: 'карточка проекта',
+    })
+  }
+
+  if (!isSameHistoryMoment(record.deal.createdAt, record.deal.updatedAt)) {
+    items.push({
+      id: `deal-updated-${record.deal.id}`,
+      title: `Карточка проекта обновлена`,
+      details: `Статус проекта: ${dealStatusLabels[record.deal.status]}; статус оплаты: ${paymentStatusLabels[record.deal.paymentStatus]}.`,
+      actor: projectActor,
+      createdAt: record.deal.updatedAt,
+      statusLabel: dealStatusLabels[record.deal.status],
+      tone: getProjectHistoryTone('deal', record.deal.status),
+      meta: 'обновление статуса',
+    })
+  }
+
+  if (record.object && !isSameHistoryMoment(record.object.createdAt, record.object.updatedAt)) {
+    items.push({
+      id: `object-updated-${record.object.id}`,
+      title: `Объект обновлен`,
+      details: `${record.object.name || 'Объект работ'} · ${record.object.address || 'адрес не указан'}.`,
+      actor: getUserName(state, record.object.responsibleManagerId),
+      createdAt: record.object.updatedAt,
+      statusLabel: objectStatusLabels[record.object.status],
+      tone: 'teal',
+      meta: 'статус объекта',
+    })
+  }
+
+  record.quotes.forEach((quote) => {
+    items.push({
+      id: `quote-created-${quote.id}`,
+      title: `КП ${quote.number} создано`,
+      details: `${quote.title || 'Коммерческое предложение'} · позиций ${quote.items.length} · сумма ${formatMoney(getQuoteSaleTotal(quote))}.`,
+      actor: getUserName(state, quote.createdByUserId),
+      createdAt: quote.createdAt,
+      statusLabel: quoteStatusLabels[quote.status],
+      tone: getProjectHistoryTone('quote', quote.status),
+      meta: 'коммерческое предложение',
+    })
+
+    if (!isSameHistoryMoment(quote.createdAt, quote.updatedAt)) {
+      items.push({
+        id: `quote-updated-${quote.id}`,
+        title: `КП ${quote.number} обновлено`,
+        details: `Закупка ${formatMoney(getQuotePurchaseTotal(quote))}; продажа ${formatMoney(getQuoteSaleTotal(quote))}; маржа ${getQuoteMarginPercent(quote)}%.`,
+        actor: getUserName(state, quote.createdByUserId),
+        createdAt: quote.updatedAt,
+        statusLabel: quoteStatusLabels[quote.status],
+        tone: getProjectHistoryTone('quote', quote.status),
+        meta: 'обновление КП',
+      })
+    }
+
+    if (quote.sentAt) {
+      items.push({
+        id: `quote-sent-${quote.id}`,
+        title: `КП ${quote.number} отправлено`,
+        details: `${quote.title || 'Коммерческое предложение'} · сумма ${formatMoney(getQuoteSaleTotal(quote))}.`,
+        actor: getUserName(state, quote.createdByUserId),
+        createdAt: quote.sentAt,
+        statusLabel: 'Отправка',
+        tone: 'blue',
+        meta: 'коммерческое предложение',
+      })
+    }
+  })
+
+  record.payments.forEach((payment) => {
+    items.push({
+      id: `payment-created-${payment.id}`,
+      title: `Счет ${payment.invoiceNumber} выставлен`,
+      details: `Сумма ${formatMoney(payment.amountTotal)}; ожидаемая дата оплаты ${formatDate(payment.expectedPaymentDate)}.`,
+      actor: getUserName(state, payment.responsibleUserId),
+      createdAt: payment.invoiceDate || payment.createdAt,
+      statusLabel: paymentStatusLabels[payment.status],
+      tone: getProjectHistoryTone('payment', payment.status),
+      meta: 'счет',
+    })
+
+    if (!isSameHistoryMoment(payment.createdAt, payment.updatedAt)) {
+      items.push({
+        id: `payment-updated-${payment.id}`,
+        title: `Оплата по счету ${payment.invoiceNumber} обновлена`,
+        details: `Оплачено ${formatMoney(payment.amountPaid)} из ${formatMoney(payment.amountTotal)}; остаток ${formatMoney(getPaymentDue(payment))}.`,
+        actor: getUserName(state, payment.responsibleUserId),
+        createdAt: payment.updatedAt,
+        statusLabel: paymentStatusLabels[payment.status],
+        tone: getProjectHistoryTone('payment', payment.status),
+        meta: 'статус оплаты',
+      })
+    }
+
+    if (payment.paidAt) {
+      items.push({
+        id: `payment-paid-${payment.id}`,
+        title: `Счет ${payment.invoiceNumber} оплачен`,
+        details: `Закрыта сумма ${formatMoney(payment.amountPaid)}; остаток ${formatMoney(getPaymentDue(payment))}.`,
+        actor: getUserName(state, payment.responsibleUserId),
+        createdAt: payment.paidAt,
+        statusLabel: 'Оплачено',
+        tone: 'green',
+        meta: 'статус оплаты',
+      })
+    }
+  })
+
+  record.documents.forEach((document) => {
+    items.push({
+      id: `document-created-${document.id}`,
+      title: `Документ добавлен: ${document.title}`,
+      details: `${document.originalFilename} · ${formatBytes(document.sizeBytes)} · ${document.status}.`,
+      actor: getUserName(state, document.uploadedByUserId),
+      createdAt: document.createdAt,
+      statusLabel: 'Документ',
+      tone: getProjectHistoryTone('document', document.status),
+      meta: 'файл карточки',
+    })
+
+    if (!isSameHistoryMoment(document.createdAt, document.updatedAt)) {
+      items.push({
+        id: `document-updated-${document.id}`,
+        title: `Документ обновлен: ${document.title}`,
+        details: document.comment || document.originalFilename,
+        actor: getUserName(state, document.uploadedByUserId),
+        createdAt: document.updatedAt,
+        statusLabel: document.status,
+        tone: getProjectHistoryTone('document', document.status),
+        meta: 'файл карточки',
+      })
+    }
+  })
+
+  record.reminders.forEach((task) => {
+    items.push({
+      id: `task-created-${task.id}`,
+      title: `Задача создана: ${task.title}`,
+      details: `Срок ${safeFormatDateTime(task.dueAt)}; приоритет ${task.priority}.`,
+      actor: getUserName(state, task.createdByUserId),
+      createdAt: task.createdAt,
+      statusLabel: task.status === 'done' ? 'Закрыта' : 'В работе',
+      tone: getProjectHistoryTone('task', task.status),
+      meta: 'задача менеджера',
+    })
+
+    if (task.closedAt) {
+      items.push({
+        id: `task-closed-${task.id}`,
+        title: `Задача закрыта: ${task.title}`,
+        details: task.description || 'Задача отмечена выполненной.',
+        actor: getUserName(state, task.assignedToUserId),
+        createdAt: task.closedAt,
+        statusLabel: 'Закрыта',
+        tone: 'green',
+        meta: 'задача менеджера',
+      })
+    }
+  })
+
+  record.notes.forEach((note) => {
+    items.push({
+      id: `note-created-${note.id}`,
+      title: 'Заметка монтажника сохранена',
+      details: compactHistoryText(note.text || 'Техническая заметка по объекту.'),
+      actor: getUserName(state, note.installerUserId),
+      createdAt: note.updatedAt || note.createdAt || note.createdOfflineAt,
+      statusLabel: 'Объект',
+      tone: 'teal',
+      meta: 'мобильная запись',
+    })
+  })
+
+  return items
+    .filter((item) => item.createdAt)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, limit)
 }
 
 function ProjectDocumentIcon({ kind }: { kind: ProjectPreviewDocumentKind }) {
@@ -3787,10 +4322,10 @@ function CounterpartyRegistry({
   )
 }
 
-function CatalogPreview({ record }: { record: CatalogRecord }) {
+function CatalogPreview({ record, size = 'compact' }: { record: CatalogRecord; size?: 'compact' | 'large' }) {
   return (
-    <span className="work-catalog-preview">
-      <img src={getCatalogPreviewDataUri(record)} alt="" loading="lazy" />
+    <span className={classNames('work-catalog-preview', `is-${size}`, !record.product.imageUrl && 'is-fallback')}>
+      <img src={getCatalogImageUrl(record)} alt={record.product.name} loading="lazy" />
     </span>
   )
 }
@@ -3805,110 +4340,265 @@ function CatalogInlineDetails({ record }: { record: CatalogRecord }) {
       : delta === 0
         ? 'без изменения'
         : `${delta > 0 ? '+' : ''}${formatMoney(delta)} к прошлой цене`
+  const supplierLogoUrl = getSupplierLogoUrl(record.supplier)
+  const productUrl = getCatalogProductUrl(record)
+  const availabilityBadge = getCatalogAvailabilityBadge(record)
+  const variantDetail = getCatalogVariantDetail(record)
 
   return (
-    <div className="work-inline-detail work-catalog-expanded">
-      <div className="work-inline-detail-main">
-        <article>
-          <span>Характеристики</span>
-          <strong>{record.variant.size || record.variant.variantName}</strong>
-          <small>{record.variant.color} · {record.variant.material} · {record.product.unit}</small>
-        </article>
-        <article>
-          <span>Источник</span>
-          <strong>{getSupplierSourceLabel(record.supplier?.sourceType)}</strong>
-          <small>{record.supplier?.updateNote ?? 'Заметка поставщика не указана'}</small>
-        </article>
-        <article>
-          <span>История цены</span>
-          <strong>{latestPrice ? formatMoney(latestPrice.purchasePrice) : formatMoney(record.variant.purchasePrice)}</strong>
-          <small>{deltaText}</small>
-        </article>
-        <article>
-          <span>Идентификаторы</span>
-          <strong>{record.product.externalId}</strong>
-          <small>{record.product.id} · {record.variant.id}</small>
-        </article>
+    <div className="work-catalog-detail-panel">
+      <div className="work-catalog-detail-media">
+        <CatalogPreview record={record} size="large" />
+        <div className={classNames('work-catalog-detail-supplier-logo', supplierLogoUrl && 'has-logo')}>
+          {supplierLogoUrl ? (
+            <img src={supplierLogoUrl} alt={`Логотип поставщика ${record.supplier?.name ?? ''}`} loading="lazy" />
+          ) : (
+            <span>{getCatalogInitials(record.supplier?.name ?? 'Поставщик')}</span>
+          )}
+        </div>
       </div>
 
-      <div className="work-inline-detail-actions">
-        <StatusBadge tone={getCatalogUpdateTone(record.supplier?.updateStatus)}>
-          {record.supplier?.updateStatus === 'fresh'
-            ? 'Актуально'
-            : record.supplier?.updateStatus === 'outdated'
-              ? 'Старая цена'
-              : 'Проверить'}
-        </StatusBadge>
-        <span>{record.priceHistory.length ? `${record.priceHistory.length} снимка цен` : 'нет истории'}</span>
+      <div className="work-catalog-detail-copy">
+        <div className="work-catalog-detail-heading">
+          <div>
+            <span>{record.product.category}</span>
+            <h3>{record.product.name}</h3>
+            <p>{record.product.description}</p>
+          </div>
+          {productUrl ? (
+            <a
+              className="work-catalog-product-link"
+              href={productUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`Открыть карточку товара ${record.product.name}`}
+              title="Открыть карточку товара"
+            >
+              <ExternalLink size={15} />
+              <span>Сайт</span>
+            </a>
+          ) : null}
+        </div>
+
+        <div className="work-catalog-detail-grid">
+          <article>
+            <span>Вариант</span>
+            <strong>{getCatalogVariantMeta(record)}</strong>
+            <small>{variantDetail || record.variant.variantName}</small>
+          </article>
+          <article>
+            <span>Закупочная цена</span>
+            <strong>{formatMoney(getCatalogPrice(record))}</strong>
+            <small>{deltaText}</small>
+          </article>
+          <article>
+            <span>Наличие</span>
+            <strong>{record.variant.availability || record.product.availability}</strong>
+            <small>{record.product.unit} · {record.priceHistory.length ? `${record.priceHistory.length} снимка цен` : 'нет истории'}</small>
+          </article>
+          <article>
+            <span>Артикулы</span>
+            <strong>{record.variant.sku || record.product.sku}</strong>
+            <small>{record.product.externalId}</small>
+          </article>
+        </div>
       </div>
+
+      <aside className="work-catalog-detail-aside">
+        <StatusBadge tone={availabilityBadge.tone}>{availabilityBadge.label}</StatusBadge>
+        <StatusBadge tone={getCatalogUpdateTone(record.supplier?.updateStatus)}>
+          {getCatalogUpdateLabel(record.supplier?.updateStatus)}
+        </StatusBadge>
+        <div>
+          <span>Поставщик</span>
+          <strong>{record.supplier?.name ?? 'Поставщик не указан'}</strong>
+          <small>{getSupplierSourceLabel(record.supplier?.sourceType)}</small>
+        </div>
+        <div>
+          <span>Обновление</span>
+          <strong>{formatDateTime(record.variant.updatedAt)}</strong>
+          <small>{getSupplierUpdateNote(record.supplier) || 'Заметка поставщика не указана'}</small>
+        </div>
+      </aside>
     </div>
   )
 }
 
 function CatalogRegistry({
   records,
-  allRecordsCount,
+  allRecords,
   suppliers,
   categories,
   selectedId,
   search,
+  familyFilter,
   supplierFilter,
   categoryFilter,
   availabilityFilter,
+  priceSort,
   onSearchChange,
+  onFamilyFilterChange,
   onSupplierFilterChange,
   onCategoryFilterChange,
   onAvailabilityFilterChange,
+  onPriceSortChange,
   onResetFilters,
   onToggle,
 }: {
   records: CatalogRecord[]
-  allRecordsCount: number
+  allRecords: CatalogRecord[]
   suppliers: Supplier[]
   categories: string[]
   selectedId: string | null
   search: string
+  familyFilter: string
   supplierFilter: string
   categoryFilter: string
   availabilityFilter: CatalogAvailabilityFilter
+  priceSort: CatalogPriceSort
   onSearchChange: (value: string) => void
+  onFamilyFilterChange: (value: string) => void
   onSupplierFilterChange: (value: string) => void
   onCategoryFilterChange: (value: string) => void
   onAvailabilityFilterChange: (value: CatalogAvailabilityFilter) => void
+  onPriceSortChange: (value: CatalogPriceSort) => void
   onResetFilters: () => void
   onToggle: (variantId: string) => void
 }) {
+  const selectedRecord = (selectedId ? records.find((record) => record.variant.id === selectedId) : undefined) ?? records[0]
+  const activeFilterCount = [
+    search.trim(),
+    familyFilter !== 'all',
+    supplierFilter !== 'all',
+    categoryFilter !== 'all',
+    availabilityFilter !== 'all',
+    priceSort !== 'default',
+  ].filter(Boolean).length
+  const supplierRecordCounts = new Map<string, number>()
+  const familyRecordCounts = new Map<string, number>()
+
+  allRecords.forEach((record) => {
+    supplierRecordCounts.set(record.product.supplierId, (supplierRecordCounts.get(record.product.supplierId) ?? 0) + 1)
+    const family = getCatalogFamily(record)
+    familyRecordCounts.set(family.id, (familyRecordCounts.get(family.id) ?? 0) + 1)
+  })
+
+  const stockCount = allRecords.filter((record) => matchesCatalogAvailability(record, 'stock')).length
+  const checkCount = allRecords.filter((record) => matchesCatalogAvailability(record, 'check')).length
+  const supplierCount = suppliers.filter((supplier) => (supplierRecordCounts.get(supplier.id) ?? 0) > 0).length
+
   return (
     <section className="work-registry work-catalog-registry" id="catalog-registry">
-      <div className="work-registry-head">
+      <div className="work-registry-head work-catalog-head">
         <div>
           <h2>Каталог товаров</h2>
-          <p>Единая таблица товаров из прайсов, Excel и парсера поставщиков.</p>
+          <p>Тот же справочник, из которого менеджер собирает КП: фото, поставщики, артикулы, закупка и статус обновления.</p>
         </div>
-        <StatusBadge tone="slate">
-          {records.length} из {allRecordsCount}
-        </StatusBadge>
+        <div className="work-catalog-head-actions">
+          <StatusBadge tone="slate">
+            {records.length} из {allRecords.length}
+          </StatusBadge>
+          {activeFilterCount ? (
+            <button type="button" className="work-table-button work-catalog-reset-button" onClick={onResetFilters}>
+              <X size={14} />
+              <span>Сбросить</span>
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="work-catalog-summary">
+        <article>
+          <span>Товаров в базе</span>
+          <strong>{allRecords.length}</strong>
+          <small>{supplierCount} поставщиков с позициями</small>
+        </article>
+        <article>
+          <span>В наличии</span>
+          <strong>{stockCount}</strong>
+          <small>{allRecords.length - stockCount} под заказ или по запросу</small>
+        </article>
+        <article>
+          <span>Контроль обновления</span>
+          <strong>{checkCount}</strong>
+          <small>{checkCount ? 'есть позиции на проверку' : 'критичных обновлений нет'}</small>
+        </article>
+      </div>
+
+      <div className="work-catalog-supplier-strip" aria-label="Фильтр по поставщику">
+        <button
+          type="button"
+          className={classNames('work-catalog-supplier-chip', supplierFilter === 'all' && 'is-active')}
+          onClick={() => onSupplierFilterChange('all')}
+        >
+          <span className="work-catalog-supplier-chip-icon">
+            <PackageSearch size={18} />
+          </span>
+          <span>
+            <strong>Все поставщики</strong>
+            <small>{allRecords.length} позиций</small>
+          </span>
+        </button>
+        {suppliers.map((supplier) => {
+          const count = supplierRecordCounts.get(supplier.id) ?? 0
+          const supplierLogoUrl = getSupplierLogoUrl(supplier)
+
+          if (!count) {
+            return null
+          }
+
+          return (
+            <button
+              key={supplier.id}
+              type="button"
+              className={classNames('work-catalog-supplier-chip', supplierFilter === supplier.id && 'is-active')}
+              onClick={() => onSupplierFilterChange(supplier.id)}
+            >
+              <span className={classNames('work-catalog-supplier-chip-logo', supplierLogoUrl && 'has-logo')}>
+                {supplierLogoUrl ? (
+                  <img src={supplierLogoUrl} alt={`Логотип поставщика ${supplier.name}`} loading="lazy" />
+                ) : (
+                  getCatalogInitials(supplier.name)
+                )}
+              </span>
+              <span>
+                <strong>{supplier.name}</strong>
+                <small>{count} позиций · {getSupplierSourceLabel(supplier.sourceType)}</small>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="work-catalog-family-strip" aria-label="Семейства товаров">
+        {catalogFamilies.map((family) => {
+          const count = family.id === 'all' ? allRecords.length : familyRecordCounts.get(family.id) ?? 0
+
+          return (
+            <button
+              key={family.id}
+              type="button"
+              className={classNames(familyFilter === family.id && 'is-active')}
+              onClick={() => onFamilyFilterChange(family.id)}
+            >
+              <span>{family.label}</span>
+              <small>{count}</small>
+            </button>
+          )
+        })}
       </div>
 
       <div className="work-catalog-toolbar" role="search">
         <label className="work-catalog-filter work-catalog-filter-search">
           <span>Поиск</span>
-          <input
-            value={search}
-            placeholder="Название, SKU, категория, поставщик"
-            onChange={(event) => onSearchChange(event.target.value)}
-          />
-        </label>
-        <label className="work-catalog-filter">
-          <span>Поставщик</span>
-          <select value={supplierFilter} onChange={(event) => onSupplierFilterChange(event.target.value)}>
-            <option value="all">Все поставщики</option>
-            {suppliers.map((supplier) => (
-              <option key={supplier.id} value={supplier.id}>
-                {supplier.name}
-              </option>
-            ))}
-          </select>
+          <div className="work-catalog-search-box">
+            <Search size={16} />
+            <input
+              value={search}
+              placeholder="Название, артикул, категория, поставщик"
+              onChange={(event) => onSearchChange(event.target.value)}
+            />
+          </div>
         </label>
         <label className="work-catalog-filter">
           <span>Категория</span>
@@ -3934,84 +4624,92 @@ function CatalogRegistry({
             ))}
           </select>
         </label>
-        <button type="button" className="work-table-button" onClick={onResetFilters}>
-          Сбросить
-        </button>
+        <label className="work-catalog-filter">
+          <span>Сортировка</span>
+          <select value={priceSort} onChange={(event) => onPriceSortChange(event.target.value as CatalogPriceSort)}>
+            {(Object.keys(catalogPriceSortLabels) as CatalogPriceSort[]).map((sort) => (
+              <option key={sort} value={sort}>
+                {catalogPriceSortLabels[sort]}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      <div className="work-table-wrap">
-        <table className="work-table work-catalog-table">
-          <thead>
-            <tr>
-              <th>Фото</th>
-              <th>Товар</th>
-              <th>SKU</th>
-              <th>Поставщик</th>
-              <th>Наличие</th>
-              <th>Закупка</th>
-              <th>Обновлено</th>
-            </tr>
-          </thead>
-          <tbody>
-            {records.map((record, index) => {
-              const isSelected = selectedId === record.variant.id
-              const supplierTone = getCatalogUpdateTone(record.supplier?.updateStatus)
-              const rowNumber = `Т-${String(index + 1).padStart(3, '0')}`
+      <div className="work-catalog-content">
+        <div className="work-catalog-grid" aria-label="Товары каталога">
+          {records.map((record, index) => {
+            const isSelected = selectedRecord?.variant.id === record.variant.id
+            const availabilityBadge = getCatalogAvailabilityBadge(record)
+            const supplierLogoUrl = getSupplierLogoUrl(record.supplier)
+            const rowNumber = `Т-${String(index + 1).padStart(3, '0')}`
+            const variantDetail = getCatalogVariantDetail(record)
 
-              return (
-                <Fragment key={record.variant.id}>
-                  <tr
-                    className={classNames(isSelected && 'is-selected')}
-                    tabIndex={0}
-                    aria-expanded={isSelected}
-                    onClick={() => onToggle(record.variant.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        onToggle(record.variant.id)
-                      }
-                    }}
-                  >
-                    <td className="work-catalog-photo-cell">
-                      <CatalogPreview record={record} />
-                    </td>
-                    <td className="work-catalog-product-cell">
-                      <strong>{record.product.name}</strong>
-                      <small>{rowNumber} · {record.variant.variantName} · {record.product.category}</small>
-                    </td>
-                    <td>
-                      <strong>{record.variant.sku}</strong>
-                      <small>{record.product.sku}</small>
-                    </td>
-                    <td>
+            return (
+              <article
+                key={record.variant.id}
+                className={classNames('work-catalog-card', isSelected && 'is-selected')}
+                role="button"
+                tabIndex={0}
+                aria-label={`${record.product.name}, ${record.supplier?.name ?? 'поставщик не указан'}`}
+                aria-pressed={isSelected}
+                onClick={() => onToggle(record.variant.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    onToggle(record.variant.id)
+                  }
+                }}
+              >
+                <div className="work-catalog-card-media">
+                  <CatalogPreview record={record} />
+                  <span className="work-catalog-card-index">{rowNumber}</span>
+                </div>
+
+                <div className="work-catalog-card-body">
+                  <div className="work-catalog-card-topline">
+                    <span>{getCatalogFamily(record).label}</span>
+                    <StatusBadge tone={availabilityBadge.tone}>{availabilityBadge.label}</StatusBadge>
+                  </div>
+
+                  <h3>{record.product.name}</h3>
+                  <p>{getCatalogVariantMeta(record)}</p>
+
+                  <div className="work-catalog-card-supplier">
+                    <span className={classNames('work-catalog-card-logo', supplierLogoUrl && 'has-logo')}>
+                      {supplierLogoUrl ? (
+                        <img src={supplierLogoUrl} alt={`Логотип поставщика ${record.supplier?.name ?? ''}`} loading="lazy" />
+                      ) : (
+                        getCatalogInitials(record.supplier?.name ?? 'П')
+                      )}
+                    </span>
+                    <span>
                       <strong>{record.supplier?.name ?? 'Поставщик не указан'}</strong>
                       <small>{getSupplierSourceLabel(record.supplier?.sourceType)}</small>
-                    </td>
-                    <td>
-                      <StatusBadge tone={supplierTone}>{record.variant.availability}</StatusBadge>
-                      <small>{record.product.availability}</small>
-                    </td>
-                    <td>
-                      <strong>{formatMoney(record.variant.purchasePrice)}</strong>
-                      <small>{record.product.unit}</small>
-                    </td>
-                    <td>
-                      <strong>{formatDateTime(record.variant.updatedAt)}</strong>
-                      <small>{record.supplier ? formatDateTime(record.supplier.lastUpdatedAt) : 'нет даты'}</small>
-                    </td>
-                  </tr>
-                  {isSelected ? (
-                    <tr className="work-expanded-row">
-                      <td colSpan={7}>
-                        <CatalogInlineDetails record={record} />
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              )
-            })}
-          </tbody>
-        </table>
+                    </span>
+                  </div>
+
+                  <div className="work-catalog-card-facts">
+                    <span>
+                      <strong>{formatMoney(getCatalogPrice(record))}</strong>
+                      <small>закупка / {record.product.unit}</small>
+                    </span>
+                    <span>
+                      <strong>{record.variant.sku || record.product.sku}</strong>
+                      <small>{variantDetail || record.product.category}</small>
+                    </span>
+                    <span>
+                      <strong>{formatDate(record.variant.updatedAt)}</strong>
+                      <small>{getCatalogUpdateLabel(record.supplier?.updateStatus)}</small>
+                    </span>
+                  </div>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+
+        {selectedRecord ? <CatalogInlineDetails record={selectedRecord} /> : null}
       </div>
 
       {!records.length ? (
@@ -4738,7 +5436,7 @@ function SettingsScreen({
               <article key={supplier.id}>
                 <span>
                   <strong>{supplier.name}</strong>
-                  <small>{getSupplierSourceLabel(supplier.sourceType)} · {supplier.updateNote}</small>
+                  <small>{getSupplierSourceLabel(supplier.sourceType)} · {getSupplierUpdateNote(supplier)}</small>
                 </span>
                 <StatusBadge tone={getCatalogUpdateTone(supplier.updateStatus)}>
                   {supplier.updateStatus === 'fresh' ? 'OK' : supplier.updateStatus === 'outdated' ? 'Обновить' : 'Проверить'}
@@ -4847,7 +5545,6 @@ function WorkDetails({
   commit,
   onOpenKpEditor,
   onOpenCounterparty,
-  onOpenProject,
   onPreviewDocument,
 }: {
   state: CrmState
@@ -4858,80 +5555,26 @@ function WorkDetails({
   commit: (updater: (state: CrmState) => CrmState) => void
   onOpenKpEditor: (dealId?: string) => void
   onOpenCounterparty: (counterpartyId: string) => void
-  onOpenProject: (dealId: string) => void
   onPreviewDocument: (document: ProjectPreviewDocument) => void
 }) {
+  const [activeDetailTab, setActiveDetailTab] = useState<ProjectDetailsTabId>('overview')
   const primaryContact = record.counterparty
     ? getPrimaryContact(state, record.counterparty.id)
     : undefined
   const counterpartyId = record.counterparty?.id
   const activeQuote = record.quotes[0]
   const selectedBundle = getVariantBundle(state, selectedVariantId)
-  const activity = getQuoteActivity(state, record)
   const supplierNameById = new Map(state.suppliers.map((supplier) => [supplier.id, supplier.name]))
   const contractInfo = getProjectContractInfo(record)
   const supplyInfo = getProjectSupplyInfo(state, record)
   const paymentInfo = getProjectPaymentInfo(record)
-  const relatedDeals = (counterpartyId
-    ? state.deals.filter((deal) => deal.counterpartyId === counterpartyId)
-    : [record.deal]
-  ).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-  const relatedDealIds = new Set(relatedDeals.map((deal) => deal.id))
-  const relatedObjects = counterpartyId
-    ? state.objects.filter((object) => object.counterpartyId === counterpartyId)
-    : record.object
-      ? [record.object]
-      : []
-  const relatedObjectIds = new Set(relatedObjects.map((object) => object.id))
-  const relatedQuotes = state.quotes.filter(
-    (quote) => relatedDealIds.has(quote.dealId) || quote.counterpartyId === counterpartyId,
+  const sortedProjectPayments = [...record.payments].sort((left, right) =>
+    (right.updatedAt || right.createdAt).localeCompare(left.updatedAt || left.createdAt),
   )
-  const relatedPayments = state.payments.filter(
-    (payment) => relatedDealIds.has(payment.dealId) || payment.counterpartyId === counterpartyId,
-  )
-  const relatedDocuments = state.documents.filter(
-    (document) => relatedDealIds.has(document.dealId) || document.counterpartyId === counterpartyId,
-  )
-  const relatedContracts = relatedDocuments.filter(
-    (document) =>
-      document.type === 'contract' ||
-      /договор/i.test(`${document.title} ${document.originalFilename} ${document.comment}`),
-  )
-  const relatedTasks = state.tasks.filter(
-    (task) =>
-      task.counterpartyId === counterpartyId ||
-      (task.dealId ? relatedDealIds.has(task.dealId) : false) ||
-      (task.objectId ? relatedObjectIds.has(task.objectId) : false),
-  )
-  const relatedActivityIds = new Set<string>([
-    counterpartyId ?? '',
-    ...relatedDeals.map((deal) => deal.id),
-    ...relatedObjects.map((object) => object.id),
-    ...relatedQuotes.map((quote) => quote.id),
-    ...relatedPayments.map((payment) => payment.id),
-    ...relatedDocuments.map((document) => document.id),
-  ])
-  const counterpartyActivity = state.activity
-    .filter((item) => relatedActivityIds.has(item.entityId))
-    .slice(0, 8)
-  const openRelatedDeals = relatedDeals.filter(
-    (deal) => deal.status !== 'closed_won' && deal.status !== 'closed_lost',
-  )
-  const totalContractAmount = relatedDeals.reduce(
-    (sum, deal) => sum + (deal.actualAmount || deal.expectedAmount),
-    0,
-  )
-  const expectedCounterpartyAmount = openRelatedDeals.reduce((sum, deal) => sum + deal.expectedAmount, 0)
-  const paidCounterpartyAmount = relatedPayments.reduce((sum, payment) => sum + payment.amountPaid, 0)
-  const dueCounterpartyAmount = relatedPayments.reduce((sum, payment) => sum + getPaymentDue(payment), 0)
-  const overdueCounterpartyAmount = relatedPayments
-    .filter(isPaymentOverdue)
-    .reduce((sum, payment) => sum + getPaymentDue(payment), 0)
+  const latestProjectPayment = sortedProjectPayments[0]
+  const projectHistoryItems = buildProjectHistoryItems(state, record)
   const activeQuotePurchaseTotal = activeQuote ? getQuotePurchaseTotal(activeQuote) : 0
   const activeQuoteSaleTotal = activeQuote ? getQuoteSaleTotal(activeQuote) : 0
-  const latestQuote = relatedQuotes[0]
-  const latestPayment = relatedPayments[0]
-  const activeTasksCount = relatedTasks.filter((task) => task.status !== 'done').length
   const objectMeasurements = record.notes.flatMap((note) => note.measurements)
   const primaryContactValue = primaryContact
     ? `${primaryContact.fullName}, ${primaryContact.position || 'должность не указана'}`
@@ -4943,9 +5586,11 @@ function WorkDetails({
   const projectDocuments = getProjectDocumentsForInline(record)
   const quoteDocuments = projectDocuments.filter((document) => document.typeLabel === 'КП')
   const regularProjectDocuments = projectDocuments.filter((document) => document.typeLabel !== 'КП')
-  const firstInvoiceDocument = invoiceDocuments[0]
-  const firstRegularDocument = regularProjectDocuments[0] ?? projectDocuments[0]
+  const overviewDocuments = regularProjectDocuments.length ? regularProjectDocuments : projectDocuments
+  const projectContacts = getProjectContacts(state, record)
+  const detailComment = getProjectComment(record) || 'Комментарий не указан.'
   const paymentSummary = getProjectPaymentSummary(record)
+  const paidProjectAmount = record.payments.reduce((sum, payment) => sum + payment.amountPaid, 0)
   const saveDealText = (field: 'title' | 'description' | 'source' | 'nextActionText', value: string) => {
     const normalized = field === 'description' || field === 'nextActionText'
       ? normalizeInlineText(value)
@@ -5054,119 +5699,6 @@ function WorkDetails({
       ),
     }))
   }
-  const saveManagerObjectConditions = (value: string) => {
-    const normalized = normalizeInlineText(value)
-
-    if (record.object?.id) {
-      saveObjectText('importantNotes', normalized, true)
-      return
-    }
-
-    saveDealText('description', normalized)
-  }
-  const saveManagerNextAction = (value: string) => saveDealText('nextActionText', value)
-  const saveInstallerNoteText = (noteId: string, value: string) => {
-    const normalized = normalizeInlineText(value)
-
-    commit((current) => {
-      const now = new Date().toISOString()
-
-      if (noteId === 'installer-object-default') {
-        const workObjectId = record.object?.id ?? record.deal.objectId
-
-        if (!workObjectId || !normalized) {
-          return current
-        }
-
-        const newNote: InstallerNote = {
-          id: makeProjectEntityId('note'),
-          objectId: workObjectId,
-          dealId: record.deal.id,
-          installerUserId: currentUserId,
-          text: normalized,
-          measurements: [],
-          localClientId: makeProjectEntityId('local-note'),
-          status: 'saved',
-          createdOfflineAt: now,
-          createdAt: now,
-          updatedAt: now,
-        }
-
-        return {
-          ...current,
-          installerNotes: [newNote, ...current.installerNotes],
-        }
-      }
-
-      return {
-        ...current,
-        installerNotes: current.installerNotes.map((note) =>
-          note.id === noteId
-            ? {
-                ...note,
-                text: normalized,
-                updatedAt: now,
-              }
-            : note,
-        ),
-      }
-    })
-  }
-  const managerObjectComments = [
-    {
-      id: 'manager-object-conditions',
-      author: getUserName(state, record.deal.responsibleUserId),
-      role: 'Менеджер проекта',
-      date: safeFormatDateTime(record.deal.updatedAt),
-      title: 'Особенности объекта со слов заказчика',
-      text:
-        record.object?.importantNotes ||
-        record.object?.comment ||
-        record.deal.description ||
-        'Заказчик просит предварительно согласовать время доступа, контакт ответственного на объекте и порядок передачи материалов. Перед выездом нужно подтвердить адрес, режим работы объекта и возможность заноса оборудования.',
-      editValue: record.object?.importantNotes || record.object?.comment || record.deal.description || '',
-      onSave: saveManagerObjectConditions,
-    },
-    {
-      id: 'manager-next-action',
-      author: getUserName(state, record.deal.responsibleUserId),
-      role: 'Менеджер проекта',
-      date: safeFormatDateTime(record.deal.nextActionAt),
-      title: 'Комментарий к следующему действию',
-      text: record.deal.nextActionText.trim() || 'Следующее действие не заполнено.',
-      editValue: record.deal.nextActionText,
-      onSave: saveManagerNextAction,
-    },
-  ]
-  const installerObjectComments = record.notes.length
-    ? record.notes.map((note, index) => ({
-        id: note.id,
-        author: getUserName(state, note.installerUserId),
-        role: 'Монтажник',
-        date: safeFormatDateTime(note.createdAt || note.createdOfflineAt),
-        title: `Заметка с объекта ${index + 1}`,
-        text: [
-          note.text,
-          note.measurements.length
-            ? `Замеры: ${note.measurements.map((measurement) => `${measurement.label}: ${measurement.value}`).join(', ')}.`
-            : '',
-        ].filter(Boolean).join(' '),
-        editValue: note.text,
-        onSave: (value: string) => saveInstallerNoteText(note.id, value),
-      }))
-    : [
-        {
-          id: 'installer-object-default',
-          author: 'Монтажная группа',
-          role: 'Монтажник',
-          date: 'после выезда',
-          title: 'Что проверить на месте',
-          text: 'Перед монтажом нужно осмотреть основание под крепеж, проверить ширину проходов, состояние стен и пола, наличие препятствий для установки, а также согласовать с представителем заказчика места крепления и порядок уборки после работ.',
-          editValue: '',
-          onSave: (value: string) => saveInstallerNoteText('installer-object-default', value),
-        },
-      ]
-
   const projectFields: ProjectDetailField[] = [
     {
       label: 'Номер проекта',
@@ -5476,40 +6008,228 @@ function WorkDetails({
     },
   ]
 
-  const documentPaymentFields: ProjectDetailField[] = [
+  const sourceText = [
+    record.deal.title,
+    record.deal.description,
+    record.object?.name,
+    record.object?.comment,
+    record.object?.importantNotes,
+  ].filter(Boolean).join(' ').toLowerCase()
+  const hasProjectText = (patterns: RegExp[]) => patterns.some((pattern) => pattern.test(sourceText))
+  const isNavigationProject = hasProjectText([/навигац|таблич|мнем|пикт|указател|аудитор|кабинет|этаж|зал|холл|маршрут|тактил/])
+  const isRailingProject = hasProjectText([/поруч|пандус|лестнич|вход|двор|кнопк/])
+  const isIndustrialProject = hasProjectText([/огражд|склад|промышлен|кпп|стойк|маркировк|отгруз/])
+  const isSanitaryProject = hasProjectText([/санузел|мгн|кафе/])
+  const measurementsSummary = objectMeasurements.length
+    ? objectMeasurements.map((item) => `${item.label}: ${item.value}`).join(', ')
+    : 'контрольные размеры и отметки не внесены в карточку'
+  const accessComment = record.object?.importantNotes
+    ? `Ограничения доступа: ${record.object.importantNotes}`
+    : (isIndustrialProject
+      ? 'Зафиксировать режим допуска бригады, маршрут сопровождения по территории, точку разгрузки, временную зону складирования и ответственного за открытие рабочей зоны.'
+      : 'Зафиксировать схему доступа: свободный вход или пропуск, пост охраны, ключи, лифты, маршрут заноса, контакт допускающего и допустимое окно прохода бригады.')
+  const exteriorComment = isIndustrialProject
+    ? 'Наружные узлы: подъезд и разгрузка, пересечения с техникой, временное ограждение зоны работ, привязка стоек и разметки к воротам, колоннам, деформационным швам и фактическим траекториям погрузчиков.'
+    : isRailingProject
+      ? 'Наружный контур: входная группа, ступени, уклон, водоотвод, материал основания и состояние кромок. Для уличного крепления закладывать анкера и кронштейны с герметизацией, регулировкой и запасом на подрезку.'
+      : isNavigationProject
+        ? 'Наружная навигация: входные указатели, читаемость с основного подхода, отражения на стекле, свободная зона крепления, демонтаж старых держателей и восстановление основания после клея или механического крепежа.'
+        : 'Наружная часть: точки подхода и разгрузки, зоны крепления, материал основания, старые отверстия, пересечения с дверными створками и участки, где монтаж может ограничить вход или поток посетителей.'
+  const interiorComment = isSanitaryProject
+    ? 'Внутренние узлы: дверной проем, раковина, зона разворота, облицовка, пустоты под плиткой и возможные скрытые трубы в зоне анкеровки. Отдельно фиксировать габарит створки и чистые проходы.'
+    : isNavigationProject
+      ? 'Внутренняя навигация: фактические дверные проемы, номера кабинетов, развилки маршрута, лифтовые и лестничные узлы, санузлы и зоны ожидания. Количество табличек считать по точкам принятия решения.'
+      : isRailingProject
+        ? 'Внутренние узлы: ширина чистого прохода, кромки ступеней, откосы, зона открывания двери, кнопка вызова, мебель и отделка. Проверить конфликт поручня с траекторией движения и рабочей зоной двери.'
+        : 'Внутренняя часть: материал стен и пола, ширина чистых проходов, высоты установки, зоны открывания дверей, инженерные короба, мебель и участки с постоянным движением людей.'
+  const installationComment = [
+    record.notes.length
+      ? record.notes.map((note) => note.text.replace(/^демо-?/i, '').trim()).filter(Boolean).join(' ')
+      : 'Для расчета нужны фото узлов крепления, тип основания, привязка к чистовым кромкам, высотные отметки, места обхода скрытых коммуникаций, схема заноса и зона временного складирования инструмента.',
+    `Контрольные замеры: ${measurementsSummary}.`,
+  ].join(' ')
+  const launchComment = isIndustrialProject
+    ? 'Уточнить технологическое окно, требования по СИЗ и наряду-допуску, допустимость сверления или искрообразования, очередность закрытия зон и схему приемки без остановки отгрузки и движения техники.'
+    : 'Уточнить окно шумных работ, точку подключения электроинструмента, возможность временного перекрытия прохода, ответственного за приемку разметки и порядок фиксации отклонений от согласованной схемы.'
+  const themedCommentFields: ProjectDetailField[] = [
     {
-      label: 'Коммерческие предложения',
-      value: record.quotes.length ? `${record.quotes.length} шт.` : 'нет',
-      note: activeQuote ? `${activeQuote.number}; ${quoteStatusLabels[activeQuote.status]}` : 'по проекту не создано',
+      label: 'Наружное оформление',
+      value: exteriorComment,
+      note: 'вход, фасад, подъезд, уличные элементы',
+      kind: 'comment',
+    },
+    {
+      label: 'Внутреннее оформление',
+      value: interiorComment,
+      note: 'помещения, маршруты, стены, проходы',
+      kind: 'comment',
+    },
+    {
+      label: 'Проход на объект',
+      value: accessComment,
+      note: 'свободный вход, пропуска, охрана, ключи',
+      kind: 'comment',
+    },
+    {
+      label: 'Монтажные ограничения',
+      value: installationComment,
+      note: 'замеры, основание, инструмент, помехи',
+      kind: 'comment',
+    },
+    {
+      label: 'Перед запуском',
+      value: launchComment,
+      note: 'что оставить в конце после первичного описания',
+      kind: 'comment',
+      wide: true,
+    },
+  ]
+  const pickFields = (fields: ProjectDetailField[], labels: string[]) =>
+    labels
+      .map((label) => fields.find((field) => field.label === label))
+      .filter((field): field is ProjectDetailField => Boolean(field))
+  const dataGroups = [
+    {
+      title: 'Проект',
+      icon: <BriefcaseBusiness size={18} />,
+      fields: pickFields(projectFields, [
+        'Номер проекта',
+        'Наименование проекта',
+        'Описание проекта',
+        'Статус проекта',
+        'Ответственный',
+        'Источник обращения',
+        'Следующее действие',
+      ]),
+      placement: 'left',
+    },
+    {
+      title: 'Договор и бюджет',
+      icon: <ReceiptText size={18} />,
+      fields: pickFields(projectFields, [
+        'Плановая сумма договора',
+        'Фактическая сумма',
+        'Состояние договора',
+      ]),
+      placement: 'left',
+    },
+    {
+      title: 'Реквизиты',
+      icon: <Building2 size={18} />,
+      fields: pickFields(counterpartyFields, [
+        'Контрагент',
+        'Тип контрагента',
+        'ИНН',
+        'КПП',
+        'ОГРН',
+        'Сайт',
+      ]),
+      placement: 'right',
+    },
+    {
+      title: 'Контакты и адреса',
+      icon: <UserCog size={18} />,
+      fields: pickFields(counterpartyFields, [
+        'Телефон',
+        'Email',
+        'Основное контактное лицо',
+        'Юридический адрес',
+        'Фактический адрес',
+        'Комментарий по контрагенту',
+      ]),
+      placement: 'right',
+    },
+    {
+      title: 'Объект и доступ',
+      icon: <KeyRound size={18} />,
+      fields: pickFields(objectFields, [
+        'Объект работ',
+        'Адрес объекта',
+        'Ответственный менеджер',
+        'Монтажная группа',
+        'Координаты',
+        'Особые условия',
+        'Комментарий по объекту',
+        'Заметки с объекта',
+      ]),
+      wide: true,
+      placement: 'wide',
+    },
+    {
+      title: 'Технические комментарии по темам',
+      icon: <Wrench size={18} />,
+      fields: themedCommentFields,
+      wide: true,
+      comments: true,
+      placement: 'wide',
+    },
+  ]
+  const leftDataGroups = dataGroups.filter((group) => group.placement === 'left')
+  const rightDataGroups = dataGroups.filter((group) => group.placement === 'right')
+  const wideDataGroups = dataGroups.filter((group) => group.placement === 'wide')
+  const renderDataGroup = (group: (typeof dataGroups)[number]) => (
+    <ProjectDetailFieldGroup
+      key={group.title}
+      title={group.title}
+      icon={group.icon}
+      fields={group.fields}
+      wide={group.wide}
+      comments={group.comments}
+    />
+  )
+
+  const quoteFinanceFields: ProjectDetailField[] = [
+    {
+      label: 'Активное КП',
+      value: activeQuote ? activeQuote.number : 'не создано',
+      note: activeQuote
+        ? `${quoteStatusLabels[activeQuote.status]} · позиций ${activeQuote.items.length}`
+        : 'по проекту пока нет коммерческого предложения',
       actionLabel: 'Открыть КП',
       onClick: () => onOpenKpEditor(record.deal.id),
+      tone: activeQuote ? 'blue' : 'amber',
     },
     {
-      label: 'Закупка по текущему КП',
+      label: 'Закупка',
       value: activeQuote ? formatMoney(activeQuotePurchaseTotal) : 'не указана',
-      note: 'сумма закупки по позициям',
+      note: activeQuote ? 'по позициям текущего КП' : 'появится после добавления позиций',
     },
     {
-      label: 'Продажа по текущему КП',
+      label: 'Продажа',
       value: activeQuote ? formatMoney(activeQuoteSaleTotal) : 'не указана',
-      note: 'с учетом заданных цен продажи',
+      note: activeQuote ? 'итоговая сумма без лишних дублей' : 'КП еще не рассчитано',
       tone: activeQuote ? 'blue' : 'slate',
     },
     {
-      label: 'Маржа по текущему КП',
+      label: 'Маржа',
       value: activeQuote ? formatMoney(getQuoteMargin(activeQuote)) : 'не рассчитана',
       note: activeQuote ? `${getQuoteMarginPercent(activeQuote)}%` : 'нет позиций',
+      tone: activeQuote && getQuoteMargin(activeQuote) > 0 ? 'green' : 'slate',
     },
     {
-      label: 'Счета по проекту',
+      label: 'Файлы КП',
+      value: quoteDocuments.length ? `${quoteDocuments.length} шт.` : 'нет файлов',
+      note: quoteDocuments.length
+        ? activeQuote
+          ? `${activeQuote.number} · ${quoteStatusLabels[activeQuote.status]}`
+          : 'файл КП найден в документах проекта'
+        : 'файл КП не приложен',
+      wide: true,
+    },
+  ]
+
+  const paymentFinanceFields: ProjectDetailField[] = [
+    {
+      label: 'Счета',
       value: record.payments.length ? `${record.payments.length} шт.` : 'нет',
-      note: latestPayment ? `${latestPayment.invoiceNumber}; ${paymentStatusLabels[latestPayment.status]}` : 'счет не выставлен',
-      actionLabel: firstInvoiceDocument ? 'Открыть первый счет' : undefined,
-      onClick: firstInvoiceDocument ? () => onPreviewDocument(firstInvoiceDocument) : undefined,
+      note: latestProjectPayment
+        ? `${latestProjectPayment.invoiceNumber} · ${paymentStatusLabels[latestProjectPayment.status]}`
+        : 'счет по проекту не выставлен',
+      tone: record.payments.length ? 'blue' : 'amber',
     },
     {
-      label: 'Оплачено по проекту',
-      value: formatMoney(record.payments.reduce((sum, payment) => sum + payment.amountPaid, 0)),
+      label: 'Оплачено',
+      value: formatMoney(paidProjectAmount),
       note: `остаток ${formatMoney(record.dueAmount)}`,
       tone: record.dueAmount ? 'amber' : 'green',
     },
@@ -5520,69 +6240,17 @@ function WorkDetails({
       tone: record.overdueAmount ? 'red' : 'green',
     },
     {
-      label: 'Документы по проекту',
-      value: record.documents.length ? `${record.documents.length} шт.` : 'нет',
-      note: record.documents[0]?.title || 'документы не приложены',
-      actionLabel: firstRegularDocument ? 'Открыть первый документ' : undefined,
-      onClick: firstRegularDocument ? () => onPreviewDocument(firstRegularDocument) : undefined,
+      label: 'Плановая дата',
+      value: latestProjectPayment ? formatDate(latestProjectPayment.expectedPaymentDate) : 'не указана',
+      note: latestProjectPayment ? latestProjectPayment.invoiceNumber : 'нет выставленного счета',
     },
     {
-      label: 'Договоры',
-      value: relatedContracts.length ? `${relatedContracts.length} шт.` : 'нет',
-      note: relatedContracts[0]?.title || 'договор не приложен',
-      tone: relatedContracts.length ? 'green' : 'amber',
-    },
-    {
-      label: 'Активные напоминания',
-      value: activeTasksCount ? `${activeTasksCount} шт.` : 'нет',
-      note: relatedTasks[0]?.title || 'задачи не назначены',
-    },
-  ]
-
-  const counterpartyStatFields: ProjectDetailField[] = [
-    {
-      label: 'Проектов с контрагентом',
-      value: relatedDeals.length,
-      note: `${openRelatedDeals.length} в работе`,
-    },
-    {
-      label: 'Сумма договоров за все время',
-      value: formatMoney(totalContractAmount),
-      note: 'по проектам данного контрагента',
-      tone: 'blue',
-    },
-    {
-      label: 'Ожидается по действующим проектам',
-      value: formatMoney(expectedCounterpartyAmount),
-      note: 'плановая сумма незакрытых проектов',
-    },
-    {
-      label: 'Оплачено за все время',
-      value: formatMoney(paidCounterpartyAmount),
-      note: 'по счетам данного контрагента',
-      tone: 'green',
-    },
-    {
-      label: 'Ожидается к оплате',
-      value: formatMoney(dueCounterpartyAmount),
-      note: 'остаток по выставленным счетам',
-      tone: dueCounterpartyAmount ? 'amber' : 'green',
-    },
-    {
-      label: 'Просроченная задолженность',
-      value: formatMoney(overdueCounterpartyAmount),
-      note: overdueCounterpartyAmount ? 'есть просроченные счета' : 'просрочки нет',
-      tone: overdueCounterpartyAmount ? 'red' : 'green',
-    },
-    {
-      label: 'Коммерческих предложений',
-      value: relatedQuotes.length,
-      note: latestQuote ? `последнее: ${latestQuote.number}` : 'не создавались',
-    },
-    {
-      label: 'Документов',
-      value: relatedDocuments.length,
-      note: `${relatedContracts.length} договоров`,
+      label: 'Контроль оплаты',
+      value: record.reminders.filter((task) => task.status !== 'done').length
+        ? `${record.reminders.filter((task) => task.status !== 'done').length} задач`
+        : 'нет задач',
+      note: record.reminders.find((task) => task.status !== 'done')?.title || 'активные напоминания не назначены',
+      wide: true,
     },
   ]
   const catalogOptions = state.variants
@@ -5595,12 +6263,29 @@ function WorkDetails({
 
   return (
     <section className="work-detail" id="work-detail" aria-label={`Карточка проекта ${record.deal.number}`}>
-      <div className="work-detail-head">
-        <div>
-          <span>Карточка проекта</span>
-          <h2>{record.deal.number} · {record.deal.title || 'Новый проект'}</h2>
+      <div className="work-detail-nav">
+        <div className="work-detail-tabs" role="tablist" aria-label="Разделы карточки проекта">
+          {projectDetailsTabs.map((tab) => {
+            const isActive = activeDetailTab === tab.id
+
+            return (
+              <button
+                key={tab.id}
+                id={`work-detail-tab-${tab.id}`}
+                type="button"
+                role="tab"
+                className={classNames('work-detail-tab-button', isActive && 'is-active')}
+                aria-selected={isActive}
+                aria-controls={`work-detail-panel-${tab.id}`}
+                onClick={() => setActiveDetailTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            )
+          })}
         </div>
-        <div className="work-detail-actions">
+
+        <div className="work-detail-toolbar">
           {counterpartyId ? (
             <button type="button" className="work-secondary-button" onClick={() => onOpenCounterparty(counterpartyId)}>
               <ExternalLink size={16} />
@@ -5614,431 +6299,308 @@ function WorkDetails({
         </div>
       </div>
 
-      <div className="work-detail-summary-grid" aria-label="Ключевые показатели проекта">
-        <article>
-          <span>Статус проекта</span>
-          <strong>{dealStatusLabels[record.deal.status]}</strong>
-          <small>{record.deal.source || 'источник не указан'} · обновлено {safeFormatDateTime(record.deal.updatedAt)}</small>
-        </article>
-        <article>
-          <span>Договор</span>
-          <strong>{contractInfo.value}</strong>
-          <small>{contractInfo.detail}</small>
-        </article>
-        <article>
-          <span>Поставка</span>
-          <strong>{supplyInfo.source}</strong>
-          <small>{supplyInfo.invoice}</small>
-        </article>
-        <article className={record.overdueAmount ? 'is-danger' : ''}>
-          <span>Оплата</span>
-          <strong>{paymentInfo.value}</strong>
-          <small>{paymentInfo.detail}</small>
-        </article>
-      </div>
+      {activeDetailTab === 'overview' ? (
+        <section
+          id="work-detail-panel-overview"
+          className="work-detail-tab-panel"
+          role="tabpanel"
+          aria-labelledby="work-detail-tab-overview"
+        >
+          <div className="work-project-info-grid work-detail-overview-grid" aria-label="Краткая карточка проекта">
+            <article className="work-project-info-card work-project-info-card-project">
+              <span>Проект</span>
+              <strong>{record.deal.title || 'Новый проект'}</strong>
+              <small>{dealStatusLabels[record.deal.status]} · {record.deal.source || 'источник не указан'}</small>
+              <small>Договор: {contractInfo.value}; {contractInfo.detail}</small>
+            </article>
 
-      <section className="work-panel work-panel-wide work-detail-section work-detail-documents-priority">
-        <div className="work-panel-title">
-          <FileText size={18} />
-          <h3>Счета, КП и документы</h3>
-        </div>
-        <div className="work-project-info-grid work-detail-document-grid">
-          <article className="work-project-info-card work-project-info-card-docs work-detail-document-card">
-            <span>Счета</span>
-            <p>{paymentSummary}</p>
-            <ProjectDocumentList documents={invoiceDocuments} onPreview={onPreviewDocument} />
-          </article>
+            <article className="work-project-info-card">
+              <span>Наименование</span>
+              <strong>{record.counterparty?.shortName || record.counterparty?.name || 'Контрагент не указан'}</strong>
+              <small>{record.counterparty?.inn ? `ИНН ${record.counterparty.inn}` : 'ИНН не указан'}</small>
+            </article>
 
-          <article className="work-project-info-card work-project-info-card-docs work-detail-document-card">
-            <span>КП</span>
-            <p>
-              {activeQuote
-                ? `${activeQuote.number}; ${quoteStatusLabels[activeQuote.status]}; позиций ${activeQuote.items.length}; сумма продажи ${formatMoney(activeQuoteSaleTotal)}.`
-                : 'Коммерческое предложение можно собрать в конструкторе и сохранить в проект.'}
-            </p>
-            <div className="work-detail-document-action">
-              <button type="button" className="work-table-button" onClick={() => onOpenKpEditor(record.deal.id)}>
-                <FileText size={15} />
-                Открыть КП
-              </button>
-            </div>
-            <ProjectDocumentList
-              documents={quoteDocuments.length ? quoteDocuments : projectDocuments.slice(0, 1)}
-              onPreview={onPreviewDocument}
-            />
-          </article>
+            <article className="work-project-info-card">
+              <span>Адрес</span>
+              <strong>{record.object?.address || record.counterparty?.actualAddress || 'Адрес не указан'}</strong>
+              <small>{record.object?.name || 'Объект не закреплен'}</small>
+            </article>
 
-          <article className="work-project-info-card work-project-info-card-docs work-detail-document-card">
-            <span>Документы</span>
-            <p>Договоры, планы, технические материалы и рабочие файлы по объекту.</p>
-            <ProjectDocumentList
-              documents={regularProjectDocuments.length ? regularProjectDocuments : projectDocuments}
-              onPreview={onPreviewDocument}
-            />
-          </article>
-        </div>
-      </section>
+            <article className="work-project-info-card">
+              <span>Юридический адрес</span>
+              <strong>{record.counterparty?.legalAddress || 'Юридический адрес не указан'}</strong>
+              <small>Для договора и закрывающих документов</small>
+            </article>
 
-      <div className="work-detail-grid">
-        <section className="work-panel work-detail-section">
-          <div className="work-panel-title">
-            <BriefcaseBusiness size={18} />
-            <h3>Сведения о проекте</h3>
-          </div>
-          <div className="work-project-info-grid work-project-detail-grid">
-            {projectFields.map((field) => (
-              <ProjectDetailInfoCard key={field.label} field={field} />
-            ))}
-          </div>
-        </section>
-
-        <section className="work-panel work-detail-section">
-          <div className="work-panel-title">
-            <Building2 size={18} />
-            <h3>Сведения о контрагенте</h3>
-          </div>
-          <div className="work-project-info-grid work-project-detail-grid">
-            {counterpartyFields.map((field) => (
-              <ProjectDetailInfoCard key={field.label} field={field} />
-            ))}
-          </div>
-        </section>
-
-        <section className="work-panel work-detail-section">
-          <div className="work-panel-title">
-            <Wrench size={18} />
-            <h3>Объект работ</h3>
-          </div>
-          <div className="work-project-info-grid work-project-detail-grid">
-            {objectFields.map((field) => (
-              <ProjectDetailInfoCard key={field.label} field={field} />
-            ))}
-          </div>
-        </section>
-
-        <section className="work-panel work-detail-section">
-          <div className="work-panel-title">
-            <Pencil size={18} />
-            <h3>Свободные комментарии по объекту</h3>
-          </div>
-          <div className="work-object-comment-grid">
-            <div className="work-object-comment-column">
-              <b>Комментарии менеджера</b>
-              {managerObjectComments.map((comment) => (
-                <WorkObjectCommentCard key={comment.id} comment={comment} />
-              ))}
-            </div>
-            <div className="work-object-comment-column">
-              <b>Комментарии монтажника</b>
-              {installerObjectComments.map((comment) => (
-                <WorkObjectCommentCard key={comment.id} comment={comment} />
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className="work-panel work-detail-section">
-          <div className="work-panel-title">
-            <ReceiptText size={18} />
-            <h3>Документы и расчеты</h3>
-          </div>
-          <div className="work-project-info-grid work-project-detail-grid">
-            {documentPaymentFields.map((field) => (
-              <ProjectDetailInfoCard key={field.label} field={field} />
-            ))}
-          </div>
-        </section>
-
-        <section className="work-panel work-detail-section">
-          <div className="work-panel-title">
-            <Activity size={18} />
-            <h3>История взаимодействия с контрагентом</h3>
-          </div>
-          <div className="work-project-info-grid work-project-detail-grid">
-            {counterpartyStatFields.map((field) => (
-              <ProjectDetailInfoCard key={field.label} field={field} />
-            ))}
-          </div>
-          <div className="work-counterparty-history-grid">
-            <div className="work-counterparty-history-block">
-              <b>Проекты данного контрагента</b>
-              <div className="work-counterparty-project-list">
-                {relatedDeals.slice(0, 8).map((deal) => {
-                  const projectPayments = relatedPayments.filter((payment) => payment.dealId === deal.id)
-                  const projectPaid = projectPayments.reduce((sum, payment) => sum + payment.amountPaid, 0)
-                  const projectDue = projectPayments.reduce((sum, payment) => sum + getPaymentDue(payment), 0)
-
-                  const content = (
-                    <>
-                      <div>
-                        <strong>{deal.number} · {deal.title || 'Новый проект'}</strong>
-                        <small>
-                          {dealStatusLabels[deal.status]} · договор {formatMoney(deal.actualAmount || deal.expectedAmount)} · оплачено {formatMoney(projectPaid)} · остаток {formatMoney(projectDue)}
-                        </small>
-                      </div>
-                      <span className="work-table-button" aria-hidden="true">
-                        {deal.id === record.deal.id ? 'Открыт' : 'Открыть'}
-                      </span>
-                    </>
-                  )
-
-                  if (deal.id === record.deal.id) {
-                    return (
-                      <article key={deal.id} className="is-current">
-                        {content}
-                      </article>
-                    )
-                  }
-
-                  return (
-                    <button
-                      key={deal.id}
-                      type="button"
-                      className="work-counterparty-project-row"
-                      onClick={() => onOpenProject(deal.id)}
-                    >
-                      {content}
-                    </button>
-                  )
-                })}
-                {!relatedDeals.length ? <div className="work-empty">Связанные проекты не найдены.</div> : null}
-              </div>
-            </div>
-            <div className="work-counterparty-history-block">
-              <b>Последние действия</b>
-              <div className="work-counterparty-activity-list">
-                {counterpartyActivity.length ? (
-                  counterpartyActivity.map((item) => (
-                    <article key={item.id}>
-                      <span>{safeFormatDateTime(item.createdAt)}</span>
-                      <strong>{item.title}</strong>
-                      <small>{item.details}</small>
-                    </article>
+            <article className="work-project-info-card">
+              <span>Контактные лица</span>
+              <div className="work-project-contact-list">
+                {projectContacts.length ? (
+                  projectContacts.map((contact) => (
+                    <div key={contact.id} className="work-project-contact-row">
+                      <strong>{contact.fullName}</strong>
+                      <small>{contact.phone} · {contact.position}</small>
+                    </div>
                   ))
                 ) : (
-                  <div className="work-empty">История действий пока не заполнена.</div>
+                  <small>Контакты не указаны.</small>
                 )}
               </div>
-            </div>
+            </article>
+
+            <article className="work-project-info-card work-project-info-card-docs">
+              <span>Счета</span>
+              <p>{paymentSummary}</p>
+              <small>{paymentInfo.value} · {paymentInfo.detail}</small>
+              {invoiceDocuments.length ? (
+                <ProjectDocumentList documents={invoiceDocuments} onPreview={onPreviewDocument} />
+              ) : (
+                <small>Счета пока не приложены.</small>
+              )}
+            </article>
+
+            <article className="work-project-info-card work-project-info-card-docs">
+              <span>Документы</span>
+              <p>Договоры, планы, технические материалы и рабочие файлы.</p>
+              {overviewDocuments.length ? (
+                <ProjectDocumentList documents={overviewDocuments} onPreview={onPreviewDocument} />
+              ) : (
+                <small>Документы пока не приложены.</small>
+              )}
+            </article>
+
+            <article className="work-project-info-card work-project-info-card-comment">
+              <span>Комментарий</span>
+              <p>{detailComment}</p>
+              <small>Поставка: {supplyInfo.source} · {supplyInfo.invoice}</small>
+            </article>
           </div>
         </section>
+      ) : null}
 
-        <section className="work-panel work-panel-wide">
-          <div className="work-panel-title">
-            <FileText size={18} />
-            <h3>Коммерческое предложение</h3>
+      {activeDetailTab === 'data' ? (
+        <section
+          id="work-detail-panel-data"
+          className="work-detail-tab-panel"
+          role="tabpanel"
+          aria-labelledby="work-detail-tab-data"
+        >
+          <div className="work-detail-data-grid">
+            <div className="work-detail-data-column">
+              {leftDataGroups.map(renderDataGroup)}
+            </div>
+            <div className="work-detail-data-column">
+              {rightDataGroups.map(renderDataGroup)}
+            </div>
+            {wideDataGroups.map(renderDataGroup)}
+          </div>
+        </section>
+      ) : null}
+
+      {activeDetailTab === 'finance' ? (
+        <section
+          id="work-detail-panel-finance"
+          className="work-detail-tab-panel"
+          role="tabpanel"
+          aria-labelledby="work-detail-tab-finance"
+        >
+          <div className="work-detail-finance-grid">
+            <ProjectDetailFieldGroup title="Коммерческое предложение" icon={<FileText size={18} />} fields={quoteFinanceFields} />
+            <ProjectDetailFieldGroup title="Счета и оплаты" icon={<ReceiptText size={18} />} fields={paymentFinanceFields} />
           </div>
 
-          {activeQuote ? (
-            <>
-              <div className="work-quote-summary">
-                <article>
-                  <span>КП</span>
-                  <strong>{activeQuote.number}</strong>
-                  <small>{quoteStatusLabels[activeQuote.status]}</small>
-                </article>
-                <article>
-                  <span>Закупка</span>
-                  <strong>{formatMoney(getQuotePurchaseTotal(activeQuote))}</strong>
-                  <small>сумма закупки по позициям</small>
-                </article>
-                <article>
-                  <span>Продажа</span>
-                  <strong>{formatMoney(getQuoteSaleTotal(activeQuote))}</strong>
-                  <small>с учетом заданных цен продажи</small>
-                </article>
-                <article>
-                  <span>Маржа</span>
-                  <strong>{formatMoney(getQuoteMargin(activeQuote))}</strong>
-                  <small>{getQuoteMarginPercent(activeQuote)}%</small>
-                </article>
-              </div>
+          <section className="work-panel work-panel-wide work-detail-section work-finance-section">
+            <div className="work-panel-title">
+              <FileText size={18} />
+              <h3>Позиции КП</h3>
+            </div>
 
-              <div className="work-catalog-inline">
-                <label>
-                  <span>Добавить товар из каталога</span>
-                  <select value={selectedVariantId} onChange={(event) => onVariantChange(event.target.value)}>
-                    {catalogOptions.map(({ variant, product, supplier }) => (
-                      <option key={variant.id} value={variant.id}>
-                        {product!.name} · {variant.variantName} · {supplier!.name} · {formatMoney(variant.purchasePrice)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="work-secondary-button"
-                  disabled={!selectedBundle.variant}
-                  onClick={() =>
-                    commit((current) =>
-                      addQuoteItemFromVariant(current, activeQuote.id, selectedVariantId, currentUserId),
-                    )
-                  }
-                >
-                  <PackageSearch size={16} />
-                  Добавить в КП
-                </button>
-              </div>
-
-              <div className="work-quote-table" role="table" aria-label="Позиции КП">
-                <div className="work-quote-row is-head" role="row">
-                  <span>Товар</span>
-                  <span>Поставщик</span>
-                  <span>Закупка</span>
-                  <span>Кол-во</span>
-                  <span>Продажа</span>
-                  <span>Итого</span>
-                </div>
-                {activeQuote.items.map((item) => (
-                  <div className="work-quote-row" role="row" key={item.id}>
-                    <span>
-                      <strong>{item.name}</strong>
-                      <small>{item.sku} · {item.size} · {item.color}</small>
-                    </span>
-                    <span>{supplierNameById.get(item.supplierId) ?? 'не указан'}</span>
-                    <span>{formatMoney(item.purchasePrice)}</span>
-                    <span>
-                      <input
-                        aria-label={`Количество ${item.name}`}
-                        type="number"
-                        min={1}
-                        value={item.qty}
-                        onChange={(event) =>
-                          commit((current) =>
-                            updateQuoteItemQty(current, activeQuote.id, item.id, Number(event.target.value)),
-                          )
-                        }
-                      />
-                    </span>
-                    <span>
-                      <input
-                        aria-label={`Цена продажи ${item.name}`}
-                        type="number"
-                        min={0}
-                        value={item.salePrice}
-                        onChange={(event) =>
-                          commit((current) =>
-                            updateQuoteItemSalePrice(current, activeQuote.id, item.id, Number(event.target.value)),
-                          )
-                        }
-                      />
-                    </span>
-                    <span>{formatMoney(item.salePrice * item.qty)}</span>
+            {activeQuote ? (
+              <>
+                <div className="work-finance-head">
+                  <div>
+                    <strong>{activeQuote.number}</strong>
+                    <small>{quoteStatusLabels[activeQuote.status]} · {activeQuote.title || record.deal.title || 'Коммерческое предложение'}</small>
                   </div>
-                ))}
-              </div>
-            </>
-          ) : (
-            <div className="work-empty work-empty-action">
-              <span>КП еще не создано для этого проекта. Откройте пустой конструктор, выберите товары и сохраните документ в эту карточку.</span>
-              <button type="button" className="work-primary-button" onClick={() => onOpenKpEditor(record.deal.id)}>
-                <FileText size={16} />
-                Создать КП
-              </button>
-            </div>
-          )}
-        </section>
-
-        <section className="work-panel">
-          <div className="work-panel-title">
-            <ReceiptText size={18} />
-            <h3>Оплаты и задолженность</h3>
-          </div>
-          <div className="work-payment-list">
-            {record.payments.map((payment) => (
-              <article key={payment.id} className={classNames(isPaymentOverdue(payment) && 'is-danger')}>
-                <div>
-                  <StatusBadge tone={isPaymentOverdue(payment) ? 'red' : payment.status === 'paid' ? 'green' : 'amber'}>
-                    {isPaymentOverdue(payment) ? 'Просрочка' : paymentStatusLabels[payment.status]}
-                  </StatusBadge>
-                  <strong>{payment.invoiceNumber}</strong>
+                  <button type="button" className="work-secondary-button" onClick={() => onOpenKpEditor(record.deal.id)}>
+                    <FileText size={16} />
+                    Открыть КП
+                  </button>
                 </div>
-                <span>{formatMoney(payment.amountPaid)} оплачено из {formatMoney(payment.amountTotal)}</span>
-                <small>Ожидали: {formatDate(payment.expectedPaymentDate)} · остаток {formatMoney(getPaymentDue(payment))}</small>
-                {payment.status !== 'paid' ? (
+
+                <div className="work-catalog-inline work-finance-catalog">
+                  <label>
+                    <span>Добавить товар из каталога</span>
+                    <select value={selectedVariantId} onChange={(event) => onVariantChange(event.target.value)}>
+                      {catalogOptions.map(({ variant, product, supplier }) => (
+                        <option key={variant.id} value={variant.id}>
+                          {product!.name} · {variant.variantName} · {supplier!.name} · {formatMoney(variant.purchasePrice)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <button
                     type="button"
-                    className="work-table-button"
-                    onClick={() => commit((current) => markPaymentPaid(current, payment.id, currentUserId))}
+                    className="work-secondary-button"
+                    disabled={!selectedBundle.variant}
+                    onClick={() =>
+                      commit((current) =>
+                        addQuoteItemFromVariant(current, activeQuote.id, selectedVariantId, currentUserId),
+                      )
+                    }
                   >
-                    <CheckCircle2 size={15} />
-                    Закрыть оплату
+                    <PackageSearch size={16} />
+                    Добавить в КП
                   </button>
+                </div>
+
+                {activeQuote.items.length ? (
+                  <div className="work-quote-table work-finance-quote-table" role="table" aria-label="Позиции КП">
+                    <div className="work-quote-row is-head" role="row">
+                      <span>Позиция</span>
+                      <span>Поставщик</span>
+                      <span>Закупка</span>
+                      <span>Кол-во</span>
+                      <span>Продажа</span>
+                      <span>Итого</span>
+                    </div>
+                    {activeQuote.items.map((item) => (
+                      <div className="work-quote-row" role="row" key={item.id}>
+                        <span>
+                          <strong>{item.name}</strong>
+                          <small>{item.sku} · {item.size} · {item.color}</small>
+                        </span>
+                        <span>{supplierNameById.get(item.supplierId) ?? 'не указан'}</span>
+                        <span>{formatMoney(item.purchasePrice)}</span>
+                        <span>
+                          <input
+                            aria-label={`Количество ${item.name}`}
+                            type="number"
+                            min={1}
+                            value={item.qty}
+                            onChange={(event) =>
+                              commit((current) =>
+                                updateQuoteItemQty(current, activeQuote.id, item.id, Number(event.target.value)),
+                              )
+                            }
+                          />
+                        </span>
+                        <span>
+                          <input
+                            aria-label={`Цена продажи ${item.name}`}
+                            type="number"
+                            min={0}
+                            value={item.salePrice}
+                            onChange={(event) =>
+                              commit((current) =>
+                                updateQuoteItemSalePrice(current, activeQuote.id, item.id, Number(event.target.value)),
+                              )
+                            }
+                          />
+                        </span>
+                        <span>{formatMoney(item.salePrice * item.qty)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="work-empty">В КП пока нет позиций.</div>
+                )}
+
+                {quoteDocuments.length ? (
+                  <div className="work-finance-documents">
+                    <ProjectDocumentList documents={quoteDocuments} onPreview={onPreviewDocument} />
+                  </div>
                 ) : null}
-              </article>
-            ))}
-            {!record.payments.length ? <div className="work-empty">Счетов по проекту пока нет.</div> : null}
-          </div>
+              </>
+            ) : (
+              <div className="work-empty work-empty-action">
+                <span>КП еще не создано для этого проекта. Откройте конструктор, выберите товары и сохраните документ в карточку.</span>
+                <button type="button" className="work-primary-button" onClick={() => onOpenKpEditor(record.deal.id)}>
+                  <FileText size={16} />
+                  Создать КП
+                </button>
+              </div>
+            )}
+          </section>
+
+          <section className="work-panel work-panel-wide work-detail-section work-finance-section">
+            <div className="work-panel-title">
+              <ReceiptText size={18} />
+              <h3>Журнал оплат</h3>
+            </div>
+            <div className="work-finance-payment-list">
+              {sortedProjectPayments.map((payment) => (
+                <article key={payment.id} className={classNames('work-finance-payment-row', isPaymentOverdue(payment) && 'is-danger')}>
+                  <div className="work-finance-payment-status">
+                    <StatusBadge tone={isPaymentOverdue(payment) ? 'red' : payment.status === 'paid' ? 'green' : 'amber'}>
+                      {isPaymentOverdue(payment) ? 'Просрочка' : paymentStatusLabels[payment.status]}
+                    </StatusBadge>
+                    <div>
+                      <strong>{payment.invoiceNumber}</strong>
+                      <small>Счет от {formatDate(payment.invoiceDate)} · ожидание {formatDate(payment.expectedPaymentDate)}</small>
+                    </div>
+                  </div>
+                  <div className="work-finance-payment-amounts">
+                    <strong>{formatMoney(payment.amountPaid)} / {formatMoney(payment.amountTotal)}</strong>
+                    <small>остаток {formatMoney(getPaymentDue(payment))}</small>
+                  </div>
+                  {payment.status !== 'paid' ? (
+                    <button
+                      type="button"
+                      className="work-table-button"
+                      onClick={() => commit((current) => markPaymentPaid(current, payment.id, currentUserId))}
+                    >
+                      <CheckCircle2 size={15} />
+                      Закрыть оплату
+                    </button>
+                  ) : (
+                    <span className="work-finance-payment-done">
+                      <CheckCircle2 size={15} />
+                      Закрыто
+                    </span>
+                  )}
+                </article>
+              ))}
+              {!record.payments.length ? <div className="work-empty">Счетов по проекту пока нет.</div> : null}
+            </div>
+          </section>
         </section>
+      ) : null}
 
-        <section className="work-panel">
-          <div className="work-panel-title">
-            <CalendarDays size={18} />
-            <h3>Документы и рабочие действия</h3>
-          </div>
-          <div className="work-linked-stack">
-            <div>
-              <b>Документы</b>
-              {record.documents.length ? (
-                record.documents.map((document) => (
-                  <p key={document.id}>
-                    <FileText size={14} />
-                    <span>{document.title}</span>
-                    <small>{formatBytes(document.sizeBytes)}</small>
-                  </p>
+      {activeDetailTab === 'history' ? (
+        <section
+          id="work-detail-panel-history"
+          className="work-detail-tab-panel"
+          role="tabpanel"
+          aria-labelledby="work-detail-tab-history"
+        >
+          <section className="work-panel work-panel-wide work-detail-section work-history-panel">
+            <div className="work-panel-title">
+              <Activity size={18} />
+              <h3>История действий</h3>
+            </div>
+            <div className="work-history-timeline">
+              {projectHistoryItems.length ? (
+                projectHistoryItems.map((item) => (
+                  <article key={item.id} className={classNames('work-history-event', item.tone && `is-${item.tone}`)}>
+                    <time dateTime={item.createdAt}>{safeFormatDateTime(item.createdAt)}</time>
+                    <div className="work-history-event-body">
+                      <div className="work-history-event-head">
+                        <strong>{item.title}</strong>
+                        <StatusBadge tone={item.tone}>{item.statusLabel}</StatusBadge>
+                      </div>
+                      <p>{item.details}</p>
+                      <small>{item.actor} · {item.meta}</small>
+                    </div>
+                  </article>
                 ))
               ) : (
-                <small>Документы не приложены.</small>
+                <div className="work-empty">История действий пока пустая.</div>
               )}
             </div>
-
-            <div>
-              <b>Напоминания</b>
-              {record.reminders.length ? (
-                record.reminders.map((reminder) => (
-                  <p key={reminder.id} className={reminder.status === 'done' ? 'is-muted' : ''}>
-                    <ChevronDown size={14} />
-                    <span>{reminder.title}</span>
-                    <small>{formatDateTime(reminder.dueAt)}</small>
-                  </p>
-                ))
-              ) : (
-                <small>Активных напоминаний нет.</small>
-              )}
-            </div>
-
-            <div>
-              <b>Заметки с объекта</b>
-              {record.notes.length ? (
-                record.notes.map((note) => (
-                  <p key={note.id}>
-                    <Wrench size={14} />
-                    <span>{note.text}</span>
-                    <small>{note.measurements.map((item) => `${item.label}: ${item.value}`).join(', ')}</small>
-                  </p>
-                ))
-              ) : (
-                <small>Заметок пока нет.</small>
-              )}
-            </div>
-
-            <div>
-              <b>Последние действия</b>
-              {activity.length ? (
-                activity.map((item) => (
-                  <p key={item.id}>
-                    <ShieldCheck size={14} />
-                    <span>{item.title}</span>
-                    <small>{getUserName(state, item.actorUserId)} · {formatDateTime(item.createdAt)}</small>
-                  </p>
-                ))
-              ) : (
-                <small>История по проекту пока пустая.</small>
-              )}
-            </div>
-          </div>
+          </section>
         </section>
-      </div>
+      ) : null}
     </section>
   )
 }
@@ -6246,7 +6808,6 @@ function ProjectDetailsWindow({
   commit,
   onOpenKpEditor,
   onOpenCounterparty,
-  onOpenProject,
   onPreviewDocument,
   onClose,
 }: {
@@ -6258,7 +6819,6 @@ function ProjectDetailsWindow({
   commit: (updater: (state: CrmState) => CrmState) => void
   onOpenKpEditor: (dealId?: string) => void
   onOpenCounterparty: (counterpartyId: string) => void
-  onOpenProject: (dealId: string) => void
   onPreviewDocument: (document: ProjectPreviewDocument) => void
   onClose: () => void
 }) {
@@ -6290,7 +6850,6 @@ function ProjectDetailsWindow({
           commit={commit}
           onOpenKpEditor={onOpenKpEditor}
           onOpenCounterparty={onOpenCounterparty}
-          onOpenProject={onOpenProject}
           onPreviewDocument={onPreviewDocument}
         />
       </section>
@@ -6312,13 +6871,13 @@ export function CrmSystemPage({
 }: CrmSystemPageProps) {
   const currentUserId = demoRoleConfig[authRole].userId
   const isManagerScope = authRole === 'manager'
+  const reduceMotion = useReducedMotion()
   const sidebarNotificationReadKey = getSidebarNotificationStorageKey(currentUserId, 'read')
   const sidebarNotificationClearedKey = getSidebarNotificationStorageKey(currentUserId, 'cleared')
   const [crmState, setCrmState] = useState<CrmState>(loadCrmState)
   const [localRoute, setLocalRoute] = useState({ filter: routeFilter, module: routeModule })
-  const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null)
-  const [collapsingWorkId, setCollapsingWorkId] = useState<string | null>(null)
-  const [collapsingWorkHeight, setCollapsingWorkHeight] = useState<number | null>(null)
+  const [selectedWorkIds, setSelectedWorkIds] = useState<string[]>([])
+  const [collapsingWorkHeights, setCollapsingWorkHeights] = useState<Record<string, number>>({})
   const [selectedCounterpartyId, setSelectedCounterpartyId] = useState<string | null>(null)
   const [selectedCatalogId, setSelectedCatalogId] = useState<string | null>(null)
   const [projectWindowId, setProjectWindowId] = useState<string | null>(null)
@@ -6331,9 +6890,11 @@ export function CrmSystemPage({
   const [isProjectCreateOpen, setIsProjectCreateOpen] = useState(false)
   const [projectAdvancedFilters, setProjectAdvancedFilters] = useState<ProjectAdvancedFilters>(defaultProjectAdvancedFilters)
   const [catalogSearch, setCatalogSearch] = useState('')
+  const [catalogFamilyFilter, setCatalogFamilyFilter] = useState('all')
   const [catalogSupplierFilter, setCatalogSupplierFilter] = useState('all')
   const [catalogCategoryFilter, setCatalogCategoryFilter] = useState('all')
   const [catalogAvailabilityFilter, setCatalogAvailabilityFilter] = useState<CatalogAvailabilityFilter>('all')
+  const [catalogPriceSort, setCatalogPriceSort] = useState<CatalogPriceSort>('default')
   const [settingsBackupAt, setSettingsBackupAt] = useState(() => formatDateTime(new Date().toISOString()))
   const [settingsBackupVersion, setSettingsBackupVersion] = useState(1)
   const [isNotificationLogOpen, setIsNotificationLogOpen] = useState(false)
@@ -6369,7 +6930,11 @@ export function CrmSystemPage({
   const filteredCatalogRecords = useMemo(() => {
     const search = normalizeCatalogText(catalogSearch)
 
-    return catalogRecords.filter((record) => {
+    const filtered = catalogRecords.filter((record) => {
+      if (catalogFamilyFilter !== 'all' && getCatalogFamily(record).id !== catalogFamilyFilter) {
+        return false
+      }
+
       if (catalogSupplierFilter !== 'all' && record.product.supplierId !== catalogSupplierFilter) {
         return false
       }
@@ -6384,7 +6949,25 @@ export function CrmSystemPage({
 
       return !search || getCatalogSearchText(record).includes(search)
     })
-  }, [catalogAvailabilityFilter, catalogCategoryFilter, catalogRecords, catalogSearch, catalogSupplierFilter])
+
+    if (catalogPriceSort === 'asc') {
+      return [...filtered].sort((left, right) => getCatalogPrice(left) - getCatalogPrice(right))
+    }
+
+    if (catalogPriceSort === 'desc') {
+      return [...filtered].sort((left, right) => getCatalogPrice(right) - getCatalogPrice(left))
+    }
+
+    return filtered
+  }, [
+    catalogAvailabilityFilter,
+    catalogCategoryFilter,
+    catalogFamilyFilter,
+    catalogPriceSort,
+    catalogRecords,
+    catalogSearch,
+    catalogSupplierFilter,
+  ])
 
   const roleRecords = useMemo(
     () => (isManagerScope ? records.filter((record) => record.deal.responsibleUserId === currentUserId) : records),
@@ -6392,6 +6975,15 @@ export function CrmSystemPage({
   )
   const activeSidebarModule = onRouteChange ? routeModule : localRoute.module
   const activeWorkFilter = onRouteChange ? routeFilter : localRoute.filter
+  const activeScreenKey = showKpEditor
+    ? 'kp-editor'
+    : `${activeSidebarModule}:${activeSidebarModule === 'projects' ? activeWorkFilter : 'all'}`
+  const screenTransition: Transition = reduceMotion
+    ? { duration: 0.01 }
+    : { duration: 0.14, ease: [0.22, 1, 0.36, 1] }
+  const screenInitial = reduceMotion ? { opacity: 0 } : { opacity: 0, y: 7, scale: 0.998 }
+  const screenAnimate = reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }
+  const screenExit = reduceMotion ? { opacity: 0 } : { opacity: 0, y: -5, scale: 0.998 }
 
   const filteredBySidebar = useMemo(
     () => roleRecords.filter((record) => matchesWorkFilter(record, activeWorkFilter)),
@@ -6413,9 +7005,7 @@ export function CrmSystemPage({
     return filteredByAdvancedFilters.filter((record) => getWorkSearchText(record).includes(search))
   }, [filteredByAdvancedFilters, projectSearch])
 
-  const selectedRecord = selectedWorkId
-    ? records.find((record) => record.deal.id === selectedWorkId)
-    : undefined
+  const selectedWorkIdSet = useMemo(() => new Set(selectedWorkIds), [selectedWorkIds])
   const projectWindowRecord = projectWindowId
     ? records.find((record) => record.deal.id === projectWindowId)
     : undefined
@@ -6447,35 +7037,44 @@ export function CrmSystemPage({
   )
 
   useEffect(() => {
-    if (!collapsingWorkId) {
+    const collapsingIds = Object.keys(collapsingWorkHeights)
+
+    if (!collapsingIds.length) {
       return undefined
     }
 
     const timeout = window.setTimeout(() => {
-      setCollapsingWorkId((current) => (current === collapsingWorkId ? null : current))
-      setSelectedWorkId((current) => (current === collapsingWorkId ? null : current))
-      setCollapsingWorkHeight(null)
+      const collapsingIdSet = new Set(collapsingIds)
+
+      setCollapsingWorkHeights((current) => {
+        const next = { ...current }
+
+        collapsingIds.forEach((dealId) => {
+          delete next[dealId]
+        })
+
+        return next
+      })
+      setSelectedWorkIds((current) => current.filter((dealId) => !collapsingIdSet.has(dealId)))
     }, 430)
 
     return () => window.clearTimeout(timeout)
-  }, [collapsingWorkId])
+  }, [collapsingWorkHeights])
 
   const updateProjectAdvancedFilter = <Key extends keyof ProjectAdvancedFilters>(
     key: Key,
     value: ProjectAdvancedFilters[Key],
   ) => {
     setProjectAdvancedFilters((current) => ({ ...current, [key]: value }))
-    setSelectedWorkId(null)
-    setCollapsingWorkId(null)
-    setCollapsingWorkHeight(null)
+    setSelectedWorkIds([])
+    setCollapsingWorkHeights({})
   }
 
   const resetProjectFilters = () => {
     setProjectAdvancedFilters(defaultProjectAdvancedFilters)
     applyWorkFilter('all', 'projects')
-    setSelectedWorkId(null)
-    setCollapsingWorkId(null)
-    setCollapsingWorkHeight(null)
+    setSelectedWorkIds([])
+    setCollapsingWorkHeights({})
   }
 
   const handleCreateProject = (draft: ProjectCreateDraft) => {
@@ -6487,9 +7086,8 @@ export function CrmSystemPage({
     setProjectSearch('')
     setProjectAdvancedFilters(defaultProjectAdvancedFilters)
     applyWorkFilter('all', 'projects')
-    setSelectedWorkId(null)
-    setCollapsingWorkId(null)
-    setCollapsingWorkHeight(null)
+    setSelectedWorkIds([])
+    setCollapsingWorkHeights({})
   }
 
   const handleConfirmProjectDelete = () => {
@@ -6501,9 +7099,14 @@ export function CrmSystemPage({
     }
 
     commit((current) => removeProjectFromState(current, dealId))
-    setSelectedWorkId((current) => (current === dealId ? null : current))
-    setCollapsingWorkId((current) => (current === dealId ? null : current))
-    setCollapsingWorkHeight(null)
+    setSelectedWorkIds((current) => current.filter((selectedDealId) => selectedDealId !== dealId))
+    setCollapsingWorkHeights((current) => {
+      if (!(dealId in current)) return current
+
+      const next = { ...current }
+      delete next[dealId]
+      return next
+    })
     setProjectWindowId((current) => (current === dealId ? null : current))
     setProjectDeleteCandidateId(null)
     setProjectPreviewDocument(null)
@@ -6511,34 +7114,51 @@ export function CrmSystemPage({
 
   const applyWorkFilter = (filter: WorkFilterId, module: SidebarModuleId = 'projects') => {
     setLocalRoute({ filter, module })
-    setSelectedWorkId(null)
-    setCollapsingWorkId(null)
-    setCollapsingWorkHeight(null)
+    setSelectedWorkIds([])
+    setCollapsingWorkHeights({})
     setSelectedCounterpartyId(null)
     setSelectedCatalogId(null)
     setProjectWindowId(null)
     setCounterpartyWindowId(null)
     setProjectPreviewDocument(null)
+    setProjectSearch('')
+    setIsProjectFilterOpen(false)
+    setProjectAdvancedFilters(defaultProjectAdvancedFilters)
+    setCatalogSearch('')
+    setCatalogFamilyFilter('all')
+    setCatalogSupplierFilter('all')
+    setCatalogCategoryFilter('all')
+    setCatalogAvailabilityFilter('all')
+    setCatalogPriceSort('default')
     onRouteChange?.(module, filter)
   }
 
   const toggleWorkRow = (dealId: string) => {
-    if (selectedWorkId === dealId) {
+    if (selectedWorkIdSet.has(dealId)) {
       const shell = document.querySelector<HTMLElement>(`[data-project-expand-shell="${dealId}"]`)
-      setCollapsingWorkHeight(shell ? Math.ceil(shell.getBoundingClientRect().height) : null)
-      setCollapsingWorkId((current) => (current === dealId ? null : dealId))
+      setCollapsingWorkHeights((current) => {
+        if (dealId in current) {
+          const next = { ...current }
+          delete next[dealId]
+          return next
+        }
+
+        return {
+          ...current,
+          [dealId]: shell ? Math.ceil(shell.getBoundingClientRect().height) : 900,
+        }
+      })
       return
     }
 
-    setCollapsingWorkId((current) => {
-      if (current === dealId) {
-        return null
-      }
+    setCollapsingWorkHeights((current) => {
+      if (!(dealId in current)) return current
 
-      return selectedWorkId ?? current
+      const next = { ...current }
+      delete next[dealId]
+      return next
     })
-    setCollapsingWorkHeight(null)
-    setSelectedWorkId(dealId)
+    setSelectedWorkIds((current) => (current.includes(dealId) ? current : [...current, dealId]))
   }
 
   const showOverview = activeSidebarModule === 'overview'
@@ -6698,6 +7318,15 @@ export function CrmSystemPage({
 
         <main className="work-layout">
           <section className="work-main">
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={activeScreenKey}
+                className="work-screen-transition"
+                initial={screenInitial}
+                animate={screenAnimate}
+                exit={screenExit}
+                transition={screenTransition}
+              >
           {!showOverview && !showKpEditor ? (
             <div className="work-page-head">
               <div>
@@ -6706,7 +7335,7 @@ export function CrmSystemPage({
                   {showCounterparties
                     ? 'Единый список клиентов с реквизитами, контактами, договорами, объектами и историей.'
                     : showCatalog
-                      ? 'Подробный список товаров, поставщиков, закупочных цен и обновлений парсера.'
+                      ? 'Подробный список товаров, поставщиков, закупочных цен и обновлений каталога.'
                       : showAnalytics
                         ? isManagerScope
                           ? 'Личные показатели по своим проектам, КП, оплатам и задачам без сравнения с другими менеджерами.'
@@ -6725,7 +7354,10 @@ export function CrmSystemPage({
             </section>
           ) : showOverview ? (
             <WorkOverview
-              isPersonalScope={isManagerScope}
+              state={crmState}
+              records={roleRecords}
+              summary={summary}
+              catalogCount={catalogRecords.length}
               onNavigate={applyWorkFilter}
               onOpenKpEditor={onOpenKpEditor}
             />
@@ -6740,16 +7372,22 @@ export function CrmSystemPage({
           ) : showCatalog ? (
             <CatalogRegistry
               records={filteredCatalogRecords}
-              allRecordsCount={catalogRecords.length}
+              allRecords={catalogRecords}
               suppliers={catalogSuppliers}
               categories={catalogCategories}
               selectedId={selectedCatalogId}
               search={catalogSearch}
+              familyFilter={catalogFamilyFilter}
               supplierFilter={catalogSupplierFilter}
               categoryFilter={catalogCategoryFilter}
               availabilityFilter={catalogAvailabilityFilter}
+              priceSort={catalogPriceSort}
               onSearchChange={(value) => {
                 setCatalogSearch(value)
+                setSelectedCatalogId(null)
+              }}
+              onFamilyFilterChange={(value) => {
+                setCatalogFamilyFilter(value)
                 setSelectedCatalogId(null)
               }}
               onSupplierFilterChange={(value) => {
@@ -6764,11 +7402,17 @@ export function CrmSystemPage({
                 setCatalogAvailabilityFilter(value)
                 setSelectedCatalogId(null)
               }}
+              onPriceSortChange={(value) => {
+                setCatalogPriceSort(value)
+                setSelectedCatalogId(null)
+              }}
               onResetFilters={() => {
                 setCatalogSearch('')
+                setCatalogFamilyFilter('all')
                 setCatalogSupplierFilter('all')
                 setCatalogCategoryFilter('all')
                 setCatalogAvailabilityFilter('all')
+                setCatalogPriceSort('default')
                 setSelectedCatalogId(null)
               }}
               onToggle={toggleCatalogRow}
@@ -6798,9 +7442,8 @@ export function CrmSystemPage({
                   value={projectSearch}
                   onChange={(event) => {
                     setProjectSearch(event.target.value)
-                    setSelectedWorkId(null)
-                    setCollapsingWorkId(null)
-                    setCollapsingWorkHeight(null)
+                    setSelectedWorkIds([])
+                    setCollapsingWorkHeights({})
                   }}
                   placeholder="Поиск по клиенту, проекту, счету или объекту"
                 />
@@ -6827,7 +7470,6 @@ export function CrmSystemPage({
                   <Plus size={16} />
                   <span>Создать</span>
                 </button>
-                <span className="work-project-result-count">{filteredRecords.length} из {roleRecords.length}</span>
               </div>
 
               {isProjectFilterOpen ? (
@@ -7027,8 +7669,9 @@ export function CrmSystemPage({
                 </thead>
                 <tbody>
                   {filteredRecords.map((record, index) => {
-                    const isSelected = selectedRecord?.deal.id === record.deal.id
-                    const isCollapsing = collapsingWorkId === record.deal.id
+                    const isSelected = selectedWorkIdSet.has(record.deal.id)
+                    const collapsingWorkHeight = collapsingWorkHeights[record.deal.id]
+                    const isCollapsing = collapsingWorkHeight !== undefined
                     const isInlineDetailsVisible = isSelected || isCollapsing
                     const inlineCollapseStyle =
                       isCollapsing && collapsingWorkHeight
@@ -7124,9 +7767,14 @@ export function CrmSystemPage({
                                     return
                                   }
 
-                                  setCollapsingWorkId((current) => (current === record.deal.id ? null : current))
-                                  setSelectedWorkId((current) => (current === record.deal.id ? null : current))
-                                  setCollapsingWorkHeight(null)
+                                  setCollapsingWorkHeights((current) => {
+                                    if (!(record.deal.id in current)) return current
+
+                                    const next = { ...current }
+                                    delete next[record.deal.id]
+                                    return next
+                                  })
+                                  setSelectedWorkIds((current) => current.filter((dealId) => dealId !== record.deal.id))
                                 }}
                               >
                                 <ProjectInlineDetails
@@ -7157,6 +7805,8 @@ export function CrmSystemPage({
           </section>
           )}
 
+              </motion.div>
+            </AnimatePresence>
           </section>
         </main>
       </div>
@@ -7171,7 +7821,6 @@ export function CrmSystemPage({
           commit={commit}
           onOpenKpEditor={onOpenKpEditor}
           onOpenCounterparty={setCounterpartyWindowId}
-          onOpenProject={setProjectWindowId}
           onPreviewDocument={setProjectPreviewDocument}
           onClose={() => setProjectWindowId(null)}
         />

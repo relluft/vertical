@@ -55,29 +55,45 @@ function cloneSeedCatalog() {
   }
 }
 
+function cloneSeedSuppliers() {
+  return JSON.parse(JSON.stringify(seedCrmState.suppliers)) as CrmState['suppliers']
+}
+
+function normalizeSeedSuppliers(state: CrmState): CrmState {
+  const seedSuppliers = cloneSeedSuppliers()
+  const seedSuppliersById = new Map(seedSuppliers.map((supplier) => [supplier.id, supplier]))
+  const currentSupplierIds = new Set(state.suppliers.map((supplier) => supplier.id))
+  const mergedSuppliers = state.suppliers.map((supplier) => {
+    const seedSupplier = seedSuppliersById.get(supplier.id)
+
+    return seedSupplier ? { ...supplier, ...seedSupplier } : supplier
+  })
+  const missingSeedSuppliers = seedSuppliers.filter((supplier) => !currentSupplierIds.has(supplier.id))
+
+  return {
+    ...state,
+    suppliers: [...mergedSuppliers, ...missingSeedSuppliers],
+  }
+}
+
 function normalizeParserMockCatalog(state: CrmState): CrmState {
+  const seedProductIds = new Set(seedCrmState.products.map((product) => product.id))
+  const seedSupplierIds = new Set(seedCrmState.suppliers.map((supplier) => supplier.id))
   const hasParserMockCatalog =
-    state.products.filter(
-      (product) => product.supplierId === 'sup-vertical' && product.imageUrl?.startsWith('/mock/vertical-products/'),
-    ).length >= 50
+    [...seedProductIds].every((id) => state.products.some((product) => product.id === id)) &&
+    [...seedSupplierIds].every((id) => state.suppliers.some((supplier) => supplier.id === id))
 
   if (hasParserMockCatalog) {
-    return state
+    return normalizeSeedSuppliers(state)
   }
 
-  const seedVerticalSupplier = seedCrmState.suppliers.find((supplier) => supplier.id === 'sup-vertical')
-  const hasVerticalSupplier = state.suppliers.some((supplier) => supplier.id === 'sup-vertical')
-  const suppliers = seedVerticalSupplier
-    ? [
-        ...state.suppliers.map((supplier) => (supplier.id === 'sup-vertical' ? seedVerticalSupplier : supplier)),
-        ...(hasVerticalSupplier ? [] : [seedVerticalSupplier]),
-      ]
-    : state.suppliers
+  const seedSuppliers = cloneSeedSuppliers()
+  const customSuppliers = state.suppliers.filter((supplier) => !seedSupplierIds.has(supplier.id))
   const catalog = cloneSeedCatalog()
 
   return {
     ...state,
-    suppliers,
+    suppliers: [...seedSuppliers, ...customSuppliers],
     products: catalog.products,
     variants: catalog.variants,
     priceHistory: catalog.priceHistory,

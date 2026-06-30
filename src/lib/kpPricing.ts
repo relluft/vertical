@@ -38,6 +38,37 @@ export function getEffectivePurchaseUnitPrice(
   return getPurchaseUnitPriceFromSale(saleUnitPrice)
 }
 
+export interface KpOperatorPricingInput {
+  quantity: number
+  purchaseUnitPrice: number
+  saleUnitPrice: number
+}
+
+export function calculateKpOperatorPricing({
+  quantity,
+  purchaseUnitPrice,
+  saleUnitPrice,
+}: KpOperatorPricingInput) {
+  const safeQuantity = Number.isFinite(quantity) ? Math.max(0, quantity) : 0
+  const safePurchaseUnitPrice = Number.isFinite(purchaseUnitPrice) ? Math.max(0, purchaseUnitPrice) : 0
+  const safeSaleUnitPrice = Number.isFinite(saleUnitPrice) ? Math.max(0, saleUnitPrice) : 0
+  const purchaseTotal = roundMoneyAmount(safeQuantity * safePurchaseUnitPrice)
+  const saleTotal = roundMoneyAmount(safeQuantity * safeSaleUnitPrice)
+  const marginUnit = roundMoneyAmount(safeSaleUnitPrice - safePurchaseUnitPrice)
+  const margin = roundMoneyAmount(saleTotal - purchaseTotal)
+  const marginPercent = purchaseTotal > 0 ? (margin / purchaseTotal) * 100 : 0
+
+  return {
+    purchaseUnitPrice: safePurchaseUnitPrice,
+    saleUnitPrice: safeSaleUnitPrice,
+    purchaseTotal,
+    saleTotal,
+    marginUnit,
+    margin,
+    marginPercent,
+  }
+}
+
 function hashString(value: string) {
   return Array.from(value).reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 7)
 }

@@ -1,6 +1,7 @@
 import { ExternalLink, Trash2 } from 'lucide-react'
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+import { ZoomableImage } from './ZoomableImage'
 import type {
   DemoOfferTable,
   DraftCellAnnotation,
@@ -20,7 +21,7 @@ import {
   kpVatRate,
   kpValidityDays,
 } from '../lib/kpFormatting'
-import { getEffectivePurchaseUnitPrice } from '../lib/kpPricing'
+import { calculateKpOperatorPricing, getEffectivePurchaseUnitPrice } from '../lib/kpPricing'
 import { cn } from '../lib/utils'
 import { resolveVerticalProductImageUrl, resolveVerticalProductUrl } from '../lib/verticalProducts'
 
@@ -84,6 +85,7 @@ interface KpOfferTableEditorProps {
   showOperatorColumns?: boolean
   operatorPanel?: ReactNode
   workspaceAlign?: 'center' | 'start'
+  maxWorkspaceScale?: number
   onPagePreviewWidthChange?: (width: number) => void
   onUpdateOfferItem?: (itemId: string, field: OfferItemEditableField, value: string) => void
   onDeleteOfferItem?: (itemId: string) => void
@@ -102,6 +104,7 @@ export function KpOfferTableEditor({
   showOperatorColumns = true,
   operatorPanel,
   workspaceAlign = 'center',
+  maxWorkspaceScale = 1,
   onPagePreviewWidthChange,
   onUpdateOfferItem,
   onDeleteOfferItem,
@@ -129,20 +132,16 @@ export function KpOfferTableEditor({
       items.map((item, index) => {
         const purchaseUnitPrice = getOperatorPurchaseUnitPrice(item)
         const saleUnitPrice = item.installationUnitPrice || 0
-        const marginUnit = saleUnitPrice - purchaseUnitPrice
-        const purchaseTotal = (item.quantity || 0) * purchaseUnitPrice
-        const saleTotal = getLineSaleTotal(item)
-        const margin = saleTotal - purchaseTotal
-        const marginPercent = purchaseTotal > 0 ? (margin / purchaseTotal) * 100 : 0
+        const pricing = calculateKpOperatorPricing({
+          quantity: item.quantity || 0,
+          purchaseUnitPrice,
+          saleUnitPrice,
+        })
 
         return {
           item,
           index,
-          purchaseUnitPrice,
-          purchaseTotal,
-          marginUnit,
-          margin,
-          marginPercent,
+          ...pricing,
           verticalUrl: getVerticalProductUrl(item, index),
         }
       }),
@@ -156,8 +155,10 @@ export function KpOfferTableEditor({
     return { purchaseTotal, margin, marginPercent }
   }, [operatorRows])
   const activeOperatorItemId = selectedOperatorItemId ?? operatorRows[0]?.item.id ?? null
+  const effectiveWorkspaceWidth = showOperatorColumns ? operatorWorkspaceWidth : operatorDocumentPageWidth
   const workspaceStageStyle = {
     '--operator-workspace-scale': workspaceScale,
+    '--operator-workspace-width': `${effectiveWorkspaceWidth}px`,
     '--operator-panel-width': `${operatorPanelWidth}px`,
     '--operator-panel-top': `${operatorPanelPlacement.top}px`,
     '--operator-panel-height': `${operatorPanelPlacement.height}px`,
@@ -170,10 +171,11 @@ export function KpOfferTableEditor({
 
     const updateWorkspaceScale = () => {
       const availableWidth = workspaceStageRef.current?.clientWidth || window.innerWidth
-      const nextScale = Math.min(1, availableWidth / operatorWorkspaceWidth)
+      const scaleLimit = showOperatorColumns ? 1 : Math.max(0.1, maxWorkspaceScale)
+      const nextScale = Math.min(scaleLimit, availableWidth / effectiveWorkspaceWidth)
       const centeredWorkspaceLeft =
-        workspaceAlign === 'center' && availableWidth >= operatorWorkspaceWidth
-          ? (availableWidth - operatorWorkspaceWidth) / 2
+        workspaceAlign === 'center' && availableWidth >= effectiveWorkspaceWidth
+          ? (availableWidth - effectiveWorkspaceWidth) / 2
           : 0
       const visiblePanelLeft = centeredWorkspaceLeft + operatorPanelLeft * nextScale
       const visiblePanelWidth = availableWidth - visiblePanelLeft - operatorPanelRightInset
@@ -191,12 +193,14 @@ export function KpOfferTableEditor({
       const nextPanelHeight = Math.max(operatorPanelMinHeight, (visiblePanelBottom - visiblePanelTop) / nextScale)
 
       setWorkspaceScale((current) => (Math.abs(current - nextScale) < 0.001 ? current : nextScale))
-      setOperatorPanelWidth((current) => (Math.abs(current - nextPanelWidth) < 0.5 ? current : nextPanelWidth))
-      setOperatorPanelPlacement((current) =>
-        Math.abs(current.top - nextPanelTop) < 0.5 && Math.abs(current.height - nextPanelHeight) < 0.5
-          ? current
-          : { top: nextPanelTop, height: nextPanelHeight },
-      )
+      if (showOperatorColumns) {
+        setOperatorPanelWidth((current) => (Math.abs(current - nextPanelWidth) < 0.5 ? current : nextPanelWidth))
+        setOperatorPanelPlacement((current) =>
+          Math.abs(current.top - nextPanelTop) < 0.5 && Math.abs(current.height - nextPanelHeight) < 0.5
+            ? current
+            : { top: nextPanelTop, height: nextPanelHeight },
+        )
+      }
       onPagePreviewWidthChange?.(operatorDocumentPageWidth * nextScale)
     }
 
@@ -225,7 +229,7 @@ export function KpOfferTableEditor({
       window.removeEventListener('resize', updateWorkspaceScale)
       window.removeEventListener('scroll', updateWorkspaceScale)
     }
-  }, [onPagePreviewWidthChange, workspaceAlign])
+  }, [effectiveWorkspaceWidth, maxWorkspaceScale, onPagePreviewWidthChange, showOperatorColumns, workspaceAlign])
 
   useLayoutEffect(() => {
     if (typeof window === 'undefined') {
@@ -357,7 +361,7 @@ export function KpOfferTableEditor({
           )
         ) : productImageUrl ? (
           <span className="kp-doc-product-cell">
-            <img className="kp-doc-product-image" src={productImageUrl} alt={displayValue || item.productCode} />
+            <ZoomableImage className="kp-doc-product-image" src={productImageUrl} alt={displayValue || item.productCode} />
             <span className={displayValue ? '' : 'kp-doc-placeholder'}>{displayValue || placeholder}</span>
           </span>
         ) : (
@@ -413,7 +417,11 @@ export function KpOfferTableEditor({
 
   return (
     <div
-      className={cn('word-stage', workspaceAlign === 'start' ? 'is-workspace-start' : '')}
+      className={cn(
+        'word-stage',
+        workspaceAlign === 'start' ? 'is-workspace-start' : '',
+        showOperatorColumns ? '' : 'is-document-only',
+      )}
       ref={workspaceStageRef}
       style={workspaceStageStyle}
     >
@@ -607,8 +615,8 @@ export function KpOfferTableEditor({
                           aria-label="Открыть товар на сайте Вертикаль"
                           title="Открыть товар на сайте Вертикаль"
                         >
-                          <span>Открыть</span>
-                          <ExternalLink size={11} />
+                          <ExternalLink size={13} />
+                          <span>ссылка</span>
                         </a>
                       </div>
                     </div>
